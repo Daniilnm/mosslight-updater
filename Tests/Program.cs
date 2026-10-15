@@ -6,6 +6,30 @@ using System.Security.Cryptography;
 using System.Text;
 using Mosslight.Update;
 
+if (args is ["--online", var trustFile, var oldArchive, var testParent])
+{
+    var settings = Wire.Decode<TrustSettings>(await System.IO.File.ReadAllBytesAsync(trustFile));
+    using var network = new HttpClient { Timeout = TimeSpan.FromMinutes(5) }; network.DefaultRequestHeaders.UserAgent.ParseAdd("Mosslight-Verification/1.0.0");
+    var remote = new ReleaseClient(network, new(settings)); var current = await remote.CheckAsync(default);
+    Assert(current.Pack.Version == 21 && current.App.Version == "1.0.0", "Unexpected live channel");
+    string parent = Paths.Root(testParent); Directory.CreateDirectory(parent); string isolated = Path.Combine(parent, Guid.NewGuid().ToString("N")); Directory.CreateDirectory(isolated);
+    string instance = Path.Combine(isolated, "instance"); ZipFile.ExtractToDirectory(oldArchive, instance);
+    var updater = new UpdateEngine(remote, new Guard()); var plan = await updater.AnalyzeAsync(instance, current.Pack, null, default);
+    await updater.ApplyAsync(plan, false, null, default); Assert((await updater.AnalyzeAsync(instance, current.Pack, null, default)).Changes.Length == 0);
+    Assert(!System.IO.File.Exists(Paths.Resolve(instance, "mods/backpack-side-gui-bmc5-2.1.0-bmc5.1.jar")));
+    Assert(await Hashes.FileAsync(Paths.Resolve(instance, "mods/backpack-side-gui-bmc5-2.1.0-bmc5.2.jar")) == "06b5b938e989264b4769a474de64c6b9f3b28e7a258151251c6fceb20993d5c3");
+    await updater.RollbackAsync(instance, null, default);
+    using (var zip = ZipFile.OpenRead(oldArchive))
+    foreach (var entry in zip.Entries.Where(e => !string.IsNullOrEmpty(e.Name)))
+    { using var stream = entry.Open(); string before = Convert.ToHexStringLower(await SHA256.HashDataAsync(stream)); Assert(await Hashes.FileAsync(Paths.Resolve(instance, entry.FullName)) == before, "Online rollback mismatch: " + entry.FullName); }
+    var app = current.App; string downloaded = await remote.GetFileAsync(new("application", app.Sha256, app.Size, FilePolicy.Managed, app.Url, app.Size, false), Path.Combine(isolated, "application-cache"), null, default);
+    Assert(await Hashes.FileAsync(downloaded) == app.Sha256);
+    var result = new {passed = true, current.Channel.Repository, packVersion = current.Pack.Version, appVersion = app.Version, appSha256 = app.Sha256, appBytes = app.Size,
+        changedFiles = plan.Changes.Length, updateBytes = plan.DownloadBytes, gameLaunch = "NONE", installedGameChanges = "NONE"};
+    await System.IO.File.WriteAllBytesAsync(Path.Combine(parent, "online-results.json"), Wire.Encode(result));
+    Console.WriteLine("PASS public GitHub signatures, v20 → v21 download/apply, complete rollback, and published EXE SHA-256. " + parent); return 0;
+}
+
 string home = Path.Combine(Path.GetFullPath(args.FirstOrDefault() ?? "test-results"), Guid.NewGuid().ToString("N")); Directory.CreateDirectory(home);
 var results = new List<object>(); int passed = 0, failed = 0;
 async Task Test(string name, Func<Task> body)

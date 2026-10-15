@@ -3,6 +3,7 @@ using System.Net;
 using System.Security.Cryptography;
 using Mosslight.Update;
 
+if (args is ["--guard-smoke", var guardRoot]) { await VerifySystemGuard(Paths.Root(guardRoot)); return; }
 if (args.Length < 5) throw new ArgumentException("pack.json public.pem old.zip local-assets-directory test-directory [additional-old.zip ...]");
 var trust = new SignatureTrust(new(Environment.GetEnvironmentVariable("MOSSLIGHT_TEST_REPOSITORY") ?? "local-preview/mosslight-updater", await File.ReadAllTextAsync(args[1])));
 var pack = trust.Verify<PackRelease>(await File.ReadAllBytesAsync(args[0]));
@@ -30,8 +31,16 @@ foreach (string archive in new[] {args[2]}.Concat(args.Skip(5)))
     Console.WriteLine($"PASS {Path.GetFileName(archive)} → v{pack.Version}: {plan.Changes.Length} changes, {downloaded} bytes; full rollback verified.");
 }
 await File.WriteAllBytesAsync(Path.Combine(home, "archive-results.json"), Wire.Encode(results));
-// This is read-only process discovery; it must allow the running dedicated server.
-await new WindowsInstanceGuard().EnsureClosedAsync(home, default); Console.WriteLine("PASS read-only Windows process guard; no Java process was started/stopped.");
+await VerifySystemGuard(home);
+
+static async Task VerifySystemGuard(string root)
+{
+    string outcome;
+    try { await new WindowsInstanceGuard().EnsureClosedAsync(root, default); outcome = "allowed: no target/unknown client"; }
+    catch (UpdateRejectedException e) { outcome = "blocked safely: " + e.Message; }
+    await File.WriteAllBytesAsync(Path.Combine(root, "system-guard-results.json"), Wire.Encode(new {outcome, gameProcessActions = "NONE"}));
+    Console.WriteLine("Read-only system guard: " + outcome + "; no Java process was started/stopped.");
+}
 
 sealed class Closed : IInstanceGuard { public Task EnsureClosedAsync(string root, CancellationToken token) => Task.CompletedTask; }
 sealed class LocalAssets(string root) : HttpMessageHandler
