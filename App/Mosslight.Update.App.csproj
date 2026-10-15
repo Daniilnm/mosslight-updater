@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+ <PropertyGroup>
+  <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF>
+  <AssemblyName>Mosslight.Update</AssemblyName><RootNamespace>Mosslight.Update.App</RootNamespace><Version>1.0.0</Version>
+  <RuntimeIdentifier>win-x64</RuntimeIdentifier><RuntimeFrameworkVersion>10.0.12</RuntimeFrameworkVersion>
+  <SelfContained>true</SelfContained><PublishSingleFile>true</PublishSingleFile><IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile><ApplicationManifest>app.manifest</ApplicationManifest>
+ </PropertyGroup>
+ <ItemGroup><ProjectReference Include="../Core/Mosslight.Update.Core.csproj"/><Resource Include="Assets/hero.png"/><EmbeddedResource Include="ReleaseTrust.json"/></ItemGroup>
+</Project>
