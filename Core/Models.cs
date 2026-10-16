@@ -25,6 +25,7 @@ public sealed record SignedEnvelope(string Payload, string Signature, string For
 public sealed record TrustSettings(string Repository, string PublicKeyPem)
 {
     public string ChannelUrl => $"https://github.com/{Repository}/releases/download/stable/channel.json";
+    [JsonIgnore] public string InstallChannelUrl => $"https://github.com/{Repository}/releases/download/stable/install-channel.json";
 }
 public sealed record InstalledFile(string Path, string Sha256, FilePolicy Policy);
 public sealed record InstalledState(int Schema, string PackId, int Version, InstalledFile[] Files);
@@ -37,7 +38,7 @@ public sealed record Change(PackFile? File, string Path, string? BeforeHash, byt
     public bool Delete => File is null;
 }
 public sealed record UpdatePlan(string Root, PackRelease Release, Change[] Changes, string[] Conflicts,
-    int ExtraMods, InstalledState? PreviousState)
+    int ExtraMods, InstalledState? PreviousState, bool FirstInstall = false)
 {
     public long DownloadBytes => Changes.Where(c => c.File is { Url: not null } && c.PreparedBytes is null)
         .GroupBy(c => c.File!.Sha256).Sum(g => g.First().File!.DownloadSize > 0 ? g.First().File!.DownloadSize : g.First().File!.Size);

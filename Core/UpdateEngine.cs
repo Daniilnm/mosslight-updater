@@ -13,16 +13,12 @@ public sealed class UpdateEngine(ReleaseClient client, IInstanceGuard guard)
         Paths.Root(root);
         if (!Directory.Exists(Path.Combine(root, "mods")) || File.Exists(Path.Combine(root, "server.properties")))
             throw new UpdateRejectedException("Выберите клиентскую папку сборки с папкой mods. Сервер обновлять этой программой нельзя.");
-        string[] mods = Directory.GetFiles(Path.Combine(root, "mods"), "*.jar").Select(Path.GetFileName).OfType<string>().ToArray();
-        bool anchors = mods.Any(n => n.StartsWith("kubejs-", StringComparison.OrdinalIgnoreCase))
-            && mods.Any(n => n.StartsWith("sophisticatedbackpacks-", StringComparison.OrdinalIgnoreCase));
-        // An interrupted replacement may have removed an anchor jar before moving its successor.
-        string transactions = Paths.Resolve(root, ".mosslight/transactions");
-        bool interrupted = !anchors && Directory.Exists(transactions) && Directory.GetDirectories(transactions).Any(d =>
-        { Paths.RejectLinks(d, root); string p = Path.Combine(d, "journal.json"); return File.Exists(p) && ReadJournal(p).Phase is "Applying" or "RollingBack"; });
-        if (!anchors && !interrupted)
-            throw new UpdateRejectedException("В этой папке не найдена базовая сборка Minecraft. Сначала нужна первая установка.");
+        Paths.RejectLinks(Path.Combine(root, "mods"), root);
+        if (Directory.Exists(Path.Combine(root, "versions")) || Directory.Exists(Path.Combine(root, "assets")))
+            throw new UpdateRejectedException("Выберите отдельный профиль сборки, а не общую папку Minecraft. В TLauncher это папка профиля внутри versions.");
     }
+    public static bool HasBaseMods(string root) => Directory.EnumerateFiles(Path.Combine(root, "mods"), "*.jar").Any(p => Path.GetFileName(p).StartsWith("kubejs-", StringComparison.OrdinalIgnoreCase))
+        && Directory.EnumerateFiles(Path.Combine(root, "mods"), "*.jar").Any(p => Path.GetFileName(p).StartsWith("sophisticatedbackpacks-", StringComparison.OrdinalIgnoreCase));
     private static InstalledState? State(string root)
     {
         string path = Paths.Resolve(root, StatePath);
@@ -77,7 +73,7 @@ public sealed class UpdateEngine(ReleaseClient client, IInstanceGuard guard)
             Paths.Resolve(root, relative); extras++;
             if (ModMetadata.ReadIds(jar).Any(modIds.Contains)) conflicts.Add(relative);
         }
-        return new(root, release, changes.ToArray(), conflicts.ToArray(), extras, previous);
+        return new(root, release, changes.ToArray(), conflicts.ToArray(), extras, previous, previous is null && !HasBaseMods(root));
     }
     public async Task ApplyAsync(UpdatePlan plan, bool quarantineConflicts, IProgress<ProgressInfo>? progress, CancellationToken token)
     {
@@ -95,6 +91,21 @@ public sealed class UpdateEngine(ReleaseClient client, IInstanceGuard guard)
         var entries = new List<JournalEntry>();
         long required = changes.Sum(c => (c.File?.Size ?? 0) + (c.BeforeHash is null ? 0 : new FileInfo(Paths.Resolve(root, c.Path)).Length)) + 32 * 1024 * 1024;
         if (new DriveInfo(Path.GetPathRoot(root)!).AvailableFreeSpace < required * 2) throw new UpdateRejectedException("Не хватает места для загрузки, временных файлов и бэкапа.");
+        var downloads = changes.Where(c => c.File is not null && c.PreparedBytes is null).Select(c => c.File!).DistinctBy(f => f.Sha256).ToArray();
+        var received = new System.Collections.Concurrent.ConcurrentDictionary<string, long>();
+        int complete = 0;
+        await Parallel.ForEachAsync(downloads, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = token }, async (file, ct) =>
+        {
+            var report = new InlineProgress(p =>
+            {
+                received[file.Sha256] = p.Bytes;
+                progress?.Report(new($"Скачиваем файлы сборки · {Volatile.Read(ref complete)}/{downloads.Length}", received.Values.Sum(), plan.DownloadBytes));
+            });
+            await client.GetFileAsync(file, Cache(root), report, ct);
+            received[file.Sha256] = file.DownloadSize > 0 ? file.DownloadSize : file.Size;
+            int done = Interlocked.Increment(ref complete);
+            progress?.Report(new($"Файлы проверены · {done}/{downloads.Length}", received.Values.Sum(), plan.DownloadBytes));
+        });
         foreach (var change in changes)
         {
             token.ThrowIfCancellationRequested(); Paths.RequireManaged(change.Path);
@@ -160,6 +171,8 @@ public sealed class UpdateEngine(ReleaseClient client, IInstanceGuard guard)
         }
         Prune(root);
     }
+    private sealed class InlineProgress(Action<ProgressInfo> report) : IProgress<ProgressInfo>
+    { public void Report(ProgressInfo value) => report(value); }
     private static void SaveJournal(string path, UpdateJournal journal) => Paths.WriteAtomic(path, Wire.Encode(journal));
     public async Task RecoverAsync(string folder, IProgress<ProgressInfo>? progress, CancellationToken token)
     { string root = Paths.Root(folder); ValidateInstance(root); using var mutex = Lock(root); await guard.EnsureClosedAsync(root, token); await RecoverUnderLockAsync(root, progress, token); }

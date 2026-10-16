@@ -136,4 +136,37 @@ public sealed class SignatureTrust(TrustSettings settings)
             || !uri.AbsolutePath.StartsWith("/" + settings.Repository + "/releases/download/", StringComparison.Ordinal))
             throw new UpdateRejectedException("Файл обновления ведёт за пределы доверенного GitHub Releases.");
     }
+    public void ValidatePackFileUrl(PackFile file)
+    {
+        if (file.Url is null) return;
+        if (Uri.TryCreate(file.Url, UriKind.Absolute, out var github) && github.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+        { ValidateAssetUrl(file.Url); return; }
+        if (!file.Path.StartsWith("mods/", StringComparison.Ordinal) || !file.Path.EndsWith(".jar", StringComparison.Ordinal)
+            || file.Gzip || file.DownloadSize != file.Size || !IsPublicModUrl(file.Url))
+            throw new UpdateRejectedException("Недопустимый источник стороннего мода.");
+    }
+    private static bool IsPublicModUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != "https" || !uri.IsDefaultPort
+            || uri.UserInfo.Length > 0 || uri.Query.Length > 0 || uri.Fragment.Length > 0) return false;
+        string path = Uri.UnescapeDataString(uri.AbsolutePath);
+        if (path.Contains('\\') || path.Split('/').Any(p => p is "." or "..")) return false;
+        return uri.Host.ToLowerInvariant() switch
+        {
+            "cdn.modrinth.com" => Regex.IsMatch(path, @"^/data/[^/]+/versions/[^/]+/[^/]+\.jar$"),
+            "edge.forgecdn.net" or "mediafilez.forgecdn.net" or "media.forgecdn.net" => Regex.IsMatch(path, @"^/files/[0-9]+/[0-9]+/[^/]+\.jar$"),
+            _ => false
+        };
+    }
+    public void ValidateDownloadRedirect(PackFile file, string redirect)
+    {
+        if (!Uri.TryCreate(redirect, UriKind.Absolute, out var target) || target.Scheme != "https" || !target.IsDefaultPort || target.UserInfo.Length > 0)
+            throw new UpdateRejectedException("Небезопасное перенаправление загрузки.");
+        if (new Uri(file.Url!).Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            if (target.Host is "release-assets.githubusercontent.com" or "objects.githubusercontent.com" && target.Fragment.Length == 0) return;
+            ValidateAssetUrl(redirect); return;
+        }
+        ValidatePackFileUrl(file with { Url = redirect });
+    }
 }

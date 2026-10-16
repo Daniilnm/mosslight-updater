@@ -9,15 +9,17 @@ using Mosslight.Update;
 if (args is ["--online", var trustFile, var oldArchive, var testParent])
 {
     var settings = Wire.Decode<TrustSettings>(await System.IO.File.ReadAllBytesAsync(trustFile));
-    using var network = new HttpClient { Timeout = TimeSpan.FromMinutes(5) }; network.DefaultRequestHeaders.UserAgent.ParseAdd("Mosslight-Verification/1.0.0");
+    using var network = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(5) }; network.DefaultRequestHeaders.UserAgent.ParseAdd("Mosslight-Verification/1.0.0");
     var remote = new ReleaseClient(network, new(settings)); var current = await remote.CheckAsync(default);
-    Assert(current.Pack.Version == 21 && current.App.Version == "1.0.0", "Unexpected live channel");
+    Assert(current.Pack.Version == 23 && current.App.Version == "1.1.0", $"Unexpected live channel: pack={current.Pack.Version}, app={current.App.Version}");
     string parent = Paths.Root(testParent); Directory.CreateDirectory(parent); string isolated = Path.Combine(parent, Guid.NewGuid().ToString("N")); Directory.CreateDirectory(isolated);
     string instance = Path.Combine(isolated, "instance"); ZipFile.ExtractToDirectory(oldArchive, instance);
     var updater = new UpdateEngine(remote, new Guard()); var plan = await updater.AnalyzeAsync(instance, current.Pack, null, default);
     await updater.ApplyAsync(plan, false, null, default); Assert((await updater.AnalyzeAsync(instance, current.Pack, null, default)).Changes.Length == 0);
     Assert(!System.IO.File.Exists(Paths.Resolve(instance, "mods/backpack-side-gui-bmc5-2.1.0-bmc5.1.jar")));
     Assert(await Hashes.FileAsync(Paths.Resolve(instance, "mods/backpack-side-gui-bmc5-2.1.0-bmc5.2.jar")) == "06b5b938e989264b4769a474de64c6b9f3b28e7a258151251c6fceb20993d5c3");
+    Assert(!System.IO.File.Exists(Paths.Resolve(instance, "mods/bmc5tweaks-1.0.12.jar")));
+    Assert(await Hashes.FileAsync(Paths.Resolve(instance, "mods/bmc5tweaks-1.0.13.jar")) == "5cdcadf1ebfca6a3fe217f2c5f06737f37c47f57df42331069c24838c00f2be6");
     await updater.RollbackAsync(instance, null, default);
     using (var zip = ZipFile.OpenRead(oldArchive))
     foreach (var entry in zip.Entries.Where(e => !string.IsNullOrEmpty(e.Name)))
@@ -27,7 +29,7 @@ if (args is ["--online", var trustFile, var oldArchive, var testParent])
     var result = new {passed = true, current.Channel.Repository, packVersion = current.Pack.Version, appVersion = app.Version, appSha256 = app.Sha256, appBytes = app.Size,
         changedFiles = plan.Changes.Length, updateBytes = plan.DownloadBytes, gameLaunch = "NONE", installedGameChanges = "NONE"};
     await System.IO.File.WriteAllBytesAsync(Path.Combine(parent, "online-results.json"), Wire.Encode(result));
-    Console.WriteLine("PASS public GitHub signatures, v20 → v21 download/apply, complete rollback, and published EXE SHA-256. " + parent); return 0;
+    Console.WriteLine("PASS public GitHub signatures, previous pack → v23 download/apply, complete rollback, and published EXE SHA-256. " + parent); return 0;
 }
 
 string home = Path.Combine(Path.GetFullPath(args.FirstOrDefault() ?? "test-results"), Guid.NewGuid().ToString("N")); Directory.CreateDirectory(home);
@@ -96,11 +98,78 @@ await Test("Signed complete channel and app consistency", async () =>
 {
     var pack = Pack(FileData("mods/one.jar", "one")); var app = new AppRelease(1, "1.0.1", Asset("app.exe"), new string('a', 64), 100);
     var channel = new UpdateChannel(1, trust.Settings.Repository, 20, Asset("pack.json"), app.Version, Asset("app.json"));
-    handler.Assets[trust.Settings.ChannelUrl] = SignatureTrust.Sign(channel, key); handler.Assets[channel.PackUrl] = SignatureTrust.Sign(pack, key); handler.Assets[channel.AppUrl] = SignatureTrust.Sign(app, key);
+    handler.Assets[trust.Settings.InstallChannelUrl] = SignatureTrust.Sign(channel, key); handler.Assets[channel.PackUrl] = SignatureTrust.Sign(pack, key); handler.Assets[channel.AppUrl] = SignatureTrust.Sign(app, key);
     Assert((await client.CheckAsync(default)).Pack.Version == 20);
     int count = handler.RequestCount; await client.CheckAsync(default); Assert(handler.RequestCount == count + 1, "Immutable manifests fetched twice");
-    channel = channel with {AppUrl = Asset("changed-app.json")}; handler.Assets[trust.Settings.ChannelUrl] = SignatureTrust.Sign(channel, key);
+    channel = channel with {AppUrl = Asset("changed-app.json")}; handler.Assets[trust.Settings.InstallChannelUrl] = SignatureTrust.Sign(channel, key);
     handler.Assets[channel.AppUrl] = SignatureTrust.Sign(app with {Version = "1.0.2"}, key); await Reject(() => client.CheckAsync(default));
+});
+await Test("First installation into an empty TLauncher profile, update and complete rollback", async () =>
+{
+    string root = Path.Combine(home, "versions", "4"); Directory.CreateDirectory(Path.Combine(root, "mods"));
+    await Put(root, "options.txt", "personal"); await Put(root, "saves/my-world/level.dat", "world");
+    var hosted = FileData("mods/kubejs-fixture.jar", "kubejs");
+    var raw = FileData("mods/sophisticatedbackpacks-fixture.jar", "backpacks");
+    string url = "https://cdn.modrinth.com/data/fixture/versions/one/backpacks.jar";
+    handler.Assets[url] = Encoding.UTF8.GetBytes("backpacks"); raw = raw with { Url = url, DownloadSize = raw.Size, Gzip = false };
+    var pack = Pack(hosted, raw, FileData("kubejs/server_scripts/test.js", "script"));
+    var plan = await engine.AnalyzeAsync(root, pack, null, default); Assert(plan.FirstInstall && plan.Changes.Length == 3);
+    await engine.ApplyAsync(plan, false, null, default);
+    var again = await engine.AnalyzeAsync(root, pack, null, default); Assert(!again.FirstInstall && again.Changes.Length == 0);
+    Assert(Read(root, "options.txt") == "personal" && Read(root, "saves/my-world/level.dat") == "world");
+    await engine.RollbackAsync(root, null, default); Assert(!Directory.EnumerateFiles(Path.Combine(root, "mods")).Any());
+    Assert(Read(root, "options.txt") == "personal" && !System.IO.File.Exists(Paths.Resolve(root, ".mosslight/state.json")));
+    Assert((await engine.AnalyzeAsync(root, pack, null, default)).FirstInstall);
+});
+await Test("Failed first installation rolls back without anchors and can be retried", async () =>
+{
+    string root = Path.Combine(home, "new-profile"); Directory.CreateDirectory(Path.Combine(root, "mods"));
+    var pack = Pack(FileData("mods/first.jar", "first"), FileData("mods/second.jar", "second"));
+    var failing = new UpdateEngine(client, guard) { AfterMutationForTest = _ => throw new IOException("Fixture failure") };
+    await Reject(async () => await failing.ApplyAsync(await failing.AnalyzeAsync(root, pack, null, default), false, null, default));
+    Assert(!Directory.GetFiles(Path.Combine(root, "mods")).Any());
+    await engine.ApplyAsync(await engine.AnalyzeAsync(root, pack, null, default), false, null, default);
+    Assert((await engine.AnalyzeAsync(root, pack, null, default)).Changes.Length == 0);
+});
+await Test("Empty mods accepted; server and shared Minecraft root remain rejected", async () =>
+{
+    string root = Path.Combine(home, "folder-safety"); Directory.CreateDirectory(Path.Combine(root, "mods")); UpdateEngine.ValidateInstance(root);
+    await Put(root, "server.properties", "server"); await Reject(() => { UpdateEngine.ValidateInstance(root); return Task.CompletedTask; });
+    System.IO.File.Delete(Path.Combine(root, "server.properties")); Directory.CreateDirectory(Path.Combine(root, "versions"));
+    await Reject(() => { UpdateEngine.ValidateInstance(root); return Task.CompletedTask; });
+});
+await Test("Only approved official sources can supply signed raw mod files", async () =>
+{
+    var f = FileData("mods/source.jar", "source") with { Gzip = false, DownloadSize = 6, Size = 6 };
+    foreach (string url in new[] {"https://cdn.modrinth.com/data/a/versions/b/a.jar", "https://edge.forgecdn.net/files/1234/567/a.jar", "https://mediafilez.forgecdn.net/files/1234/567/a.jar"}) client.Validate(Pack(f with { Url = url }));
+    foreach (string url in new[] {"http://cdn.modrinth.com/data/a/versions/b/a.jar", "https://cdn.modrinth.com.evil.example/data/a/versions/b/a.jar", "https://cdn.modrinth.com/data/a/versions/b/a.jar?token=x", "https://cdn.modrinth.com/data/a/versions/b/../../../a.jar", "https://evil.example/a.jar", "https://edge.forgecdn.net/files/1234/567/a.exe"})
+        await Reject(() => { client.Validate(Pack(f with { Url = url })); return Task.CompletedTask; });
+    await Reject(() => { client.Validate(Pack(f with { Url = "https://cdn.modrinth.com/data/a/versions/b/a.jar", Path = "kubejs/source.js" })); return Task.CompletedTask; });
+    await Reject(() => { client.Validate(Pack(f with { Url = "https://cdn.modrinth.com/data/a/versions/b/a.jar", Gzip = true })); return Task.CompletedTask; });
+});
+await Test("Official raw downloads resume, reject corruption and validate redirects", async () =>
+{
+    byte[] bytes = Encoding.UTF8.GetBytes("raw jar fixture"); string url = "https://edge.forgecdn.net/files/1234/567/source.jar";
+    var f = new PackFile("mods/source.jar", Hashes.Bytes(bytes), bytes.Length, FilePolicy.Managed, url, bytes.Length, false);
+    handler.Assets[url] = bytes; string cache = Path.Combine(home, "raw-resume"); Directory.CreateDirectory(cache);
+    await System.IO.File.WriteAllBytesAsync(Path.Combine(cache, f.Sha256 + ".part"), bytes[..4]);
+    Assert(await Hashes.FileAsync(await client.GetFileAsync(f, cache, null, default)) == f.Sha256 && handler.LastRange == 4);
+    handler.Assets[url] = Encoding.UTF8.GetBytes("bad jar fixture");
+    await Reject(() => client.GetFileAsync(f, Path.Combine(home, "raw-corrupt"), null, default)); handler.Assets[url] = bytes;
+    handler.Redirects[url] = "https://evil.example/payload.jar"; int requests = handler.RequestCount;
+    await Reject(() => client.GetFileAsync(f, Path.Combine(home, "bad-redirect"), null, default)); Assert(handler.RequestCount == requests + 1);
+    string other = "https://mediafilez.forgecdn.net/files/1234/567/source.jar"; handler.Redirects[url] = other; handler.Assets[other] = bytes;
+    Assert(await Hashes.FileAsync(await client.GetFileAsync(f, Path.Combine(home, "good-redirect"), null, default)) == f.Sha256); handler.Redirects.Remove(url);
+});
+await Test("App update discovery is independent of missing or invalid pack metadata", async () =>
+{
+    var app = new AppRelease(1, "1.1.0", Asset("app110.exe"), new string('a', 64), 100);
+    var channel = new UpdateChannel(1, trust.Settings.Repository, 23, Asset("missing-pack.json"), app.Version, Asset("app110.json"));
+    handler.Assets[trust.Settings.InstallChannelUrl] = SignatureTrust.Sign(channel, key); handler.Assets[channel.AppUrl] = SignatureTrust.Sign(app, key);
+    Assert((await client.CheckAppAsync(default)).App.Version == "1.1.0");
+    try { await client.CheckAsync(default); throw new Exception("Expected missing catalog"); } catch (HttpRequestException e) when (e.StatusCode == HttpStatusCode.NotFound) { }
+    handler.Assets.Remove(trust.Settings.InstallChannelUrl); handler.Assets[trust.Settings.ChannelUrl] = SignatureTrust.Sign(channel, key);
+    Assert((await client.CheckAppAsync(default)).App.Version == "1.1.0");
 });
 await Test("Skip versions, delete old jar, preserve extras and personal settings, rollback", async () =>
 {
@@ -212,9 +281,12 @@ sealed class Guard : IInstanceGuard { public bool Blocked; public Task EnsureClo
 sealed class FakeHttp : HttpMessageHandler
 {
     public readonly Dictionary<string, byte[]> Assets = []; public int RequestCount; public long? LastRange; public bool IgnoreRange, WrongRange;
+    public readonly Dictionary<string, string> Redirects = [];
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
     {
-        RequestCount++; string url = request.RequestUri!.AbsoluteUri; if (!Assets.TryGetValue(url, out var data)) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        RequestCount++; string url = request.RequestUri!.AbsoluteUri;
+        if (Redirects.TryGetValue(url, out var location)) { var redirect = new HttpResponseMessage(HttpStatusCode.Redirect); redirect.Headers.Location = new Uri(location); return Task.FromResult(redirect); }
+        if (!Assets.TryGetValue(url, out var data)) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         LastRange = request.Headers.Range?.Ranges.First().From; long offset = IgnoreRange ? 0 : LastRange ?? 0;
         var response = new HttpResponseMessage(offset > 0 || WrongRange ? HttpStatusCode.PartialContent : HttpStatusCode.OK) {Content = new ByteArrayContent(data[(int)offset..])};
         if (offset > 0 || WrongRange) response.Content.Headers.ContentRange = new ContentRangeHeaderValue(WrongRange ? offset + 1 : offset, data.Length - 1, data.Length);

@@ -40,6 +40,8 @@ static async Task Run(string[] args)
         var priorFiles = previous?.Files.GroupBy(f => f.Sha256).ToDictionary(g => g.Key, g => g.First()) ?? [];
         // Explicit hash approvals only. A filename or an inferred licence is not permission to mirror an arbitrary jar.
         var approved = config.ApprovedJarHashes.ToHashSet(StringComparer.Ordinal);
+        var external = config.Sources is null ? new Dictionary<string, ExternalSource>(StringComparer.Ordinal) :
+            Wire.Decode<ExternalSource[]>(await File.ReadAllBytesAsync(config.Sources)).ToDictionary(f => f.Path, StringComparer.Ordinal);
         var files = new List<PackFile>(); var archiveOnly = new List<string>();
         using (var zip = ZipFile.OpenRead(config.Archive))
         foreach (var entry in zip.Entries.Where(e => !string.IsNullOrEmpty(e.Name)).OrderBy(e => e.FullName, StringComparer.Ordinal))
@@ -67,7 +69,13 @@ static async Task Run(string[] args)
             }
             else
             {
-                if (previous is not null && !priorFiles.ContainsKey(sha))
+                if (external.TryGetValue(name, out var origin))
+                {
+                    if (origin.Sha256 != sha || origin.Size != data.LongLength) throw new IOException("Источник относится к другой версии файла: " + name);
+                    var sourced = new PackFile(name, sha, data.LongLength, ConfigPatches.PolicyFor(name), origin.Url, data.LongLength, false, ids);
+                    trust.ValidatePackFileUrl(sourced); files.Add(sourced); continue;
+                }
+                if (config.RequireComplete || previous is not null && !priorFiles.ContainsKey(sha))
                     throw new IOException("Новый сторонний JAR без подтверждённого разрешения на размещение: " + name + ". Сначала проверьте лицензию и добавьте разрешённый SHA-256; выпуск не публиковался.");
                 archiveOnly.Add(name);
             }
@@ -77,7 +85,7 @@ static async Task Run(string[] args)
         foreach (string archive in config.LegacyArchives)
         { using var zip = ZipFile.OpenRead(archive); foreach (var e in zip.Entries.Where(e => !string.IsNullOrEmpty(e.Name))) { Paths.ValidateRelative(e.FullName); if (Paths.IsManagedPath(e.FullName)) legacy.Add(e.FullName); } }
         if (previous is not null) foreach (string path in previous.Files.Select(f => f.Path).Concat(previous.LegacyPaths)) legacy.Add(path);
-        var pack = new PackRelease(1, "mosslight-friends", config.PackVersion, "1.21.1", "NeoForge", "1.0.0", config.Notes,
+        var pack = new PackRelease(1, "mosslight-friends", config.PackVersion, "1.21.1", "NeoForge", config.MinimumUpdater, config.Notes,
             files.ToArray(), legacy.Order(StringComparer.Ordinal).ToArray(), await Hashes.FileAsync(config.Archive));
         using var http = new HttpClient(); new ReleaseClient(http, trust).Validate(pack);
         await File.WriteAllBytesAsync(Path.Combine(packDir, "pack.json"), SignatureTrust.Sign(pack, key));
@@ -86,17 +94,28 @@ static async Task Run(string[] args)
         await File.WriteAllBytesAsync(Path.Combine(appDir, "app.json"), SignatureTrust.Sign(app, key));
         var channel = new UpdateChannel(1, config.Repository, config.PackVersion, packBase + "pack.json", config.AppVersion,
             $"https://github.com/{config.Repository}/releases/download/app-v{config.AppVersion}/app.json");
+        if (config.CompatibilityPack is not null)
+        {
+            byte[] compatBytes = await File.ReadAllBytesAsync(config.CompatibilityPack);
+            var compatibility = trust.Verify<PackRelease>(compatBytes); new ReleaseClient(http, trust).Validate(compatibility);
+            if (compatibility.Files.Any(f => f.Url is not null && new Uri(f.Url).Host != "github.com")) throw new IOException("Каталог совместимости не подходит для старого приложения.");
+            await File.WriteAllBytesAsync(Path.Combine(output, "compatibility-pack.json"), compatBytes);
+            await File.WriteAllBytesAsync(Path.Combine(channelDir, "install-channel.json"), SignatureTrust.Sign(channel, key));
+            channel = channel with { PackVersion = compatibility.Version, PackUrl = $"https://github.com/{config.Repository}/releases/download/pack-v{compatibility.Version}/pack.json" };
+        }
         await File.WriteAllBytesAsync(Path.Combine(channelDir, "channel.json"), SignatureTrust.Sign(channel, key));
-        await File.WriteAllBytesAsync(Path.Combine(output, "catalog-report.json"), Wire.Encode(new { config.Repository, config.PackVersion, files = files.Count, hostedFiles = files.Count(f => f.Url is not null), archiveOnly, uploadBytes = Directory.GetFiles(packDir).Sum(p => new FileInfo(p).Length), fullArchiveBytes = new FileInfo(config.Archive).Length }));
-        Console.WriteLine($"Подготовлено: {files.Count} файлов; GitHub: {files.Count(f => f.Url is not null)}. Публикации не было."); return;
+        int githubCount = files.Count(f => f.Url is not null && new Uri(f.Url).Host == "github.com");
+        await File.WriteAllBytesAsync(Path.Combine(output, "catalog-report.json"), Wire.Encode(new { config.Repository, config.PackVersion, files = files.Count, hostedFiles = githubCount, externalFiles = files.Count(f => f.Url is not null) - githubCount, archiveOnly, uploadBytes = Directory.GetFiles(packDir).Sum(p => new FileInfo(p).Length), fullArchiveBytes = new FileInfo(config.Archive).Length }));
+        Console.WriteLine($"Подготовлено: {files.Count} файлов; GitHub: {githubCount}; сторонние источники: {files.Count(f => f.Url is not null) - githubCount}. Публикации не было."); return;
     }
     if (args is ["publish" or "validate", var releaseDirectory, var repository, var publicKey])
     {
         var trust = new SignatureTrust(new(repository, await File.ReadAllTextAsync(publicKey)));
-        var channel = trust.Verify<UpdateChannel>(await File.ReadAllBytesAsync(Path.Combine(releaseDirectory, "stable", "channel.json")));
+        string installChannelPath = Path.Combine(releaseDirectory, "stable", "install-channel.json");
+        var channel = trust.Verify<UpdateChannel>(await File.ReadAllBytesAsync(File.Exists(installChannelPath) ? installChannelPath : Path.Combine(releaseDirectory, "stable", "channel.json")));
         if (channel.Repository != repository) throw new IOException("Репозиторий не совпал.");
         trust.ValidateAssetUrl(channel.PackUrl); trust.ValidateAssetUrl(channel.AppUrl);
-        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+        using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(30) };
         var pack = trust.Verify<PackRelease>(await File.ReadAllBytesAsync(Path.Combine(releaseDirectory, "pack-v" + channel.PackVersion, "pack.json")));
         var app = trust.Verify<AppRelease>(await File.ReadAllBytesAsync(Path.Combine(releaseDirectory, "app-v" + channel.AppVersion, "app.json")));
         new ReleaseClient(http, trust).Validate(pack); trust.ValidateAssetUrl(app.Url);
@@ -106,7 +125,15 @@ static async Task Run(string[] args)
         string currentPack = $"https://github.com/{repository}/releases/download/pack-v{pack.Version}/";
         var expectedAssets = new Dictionary<string, HashSet<string>> {
             ["pack-v" + pack.Version] = pack.Files.Where(f => f.Url?.StartsWith(currentPack, StringComparison.Ordinal) == true).Select(f => "blob-" + f.Sha256 + ".gz").Append("pack.json").ToHashSet(StringComparer.Ordinal),
-            ["app-v" + app.Version] = ["app.json", SelfUpdate.ExecutableName], ["stable"] = ["channel.json"] };
+            ["app-v" + app.Version] = ["app.json", SelfUpdate.ExecutableName], ["stable"] = File.Exists(installChannelPath) ? ["channel.json", "install-channel.json"] : ["channel.json"] };
+        if (File.Exists(installChannelPath))
+        {
+            var legacy = trust.Verify<UpdateChannel>(await File.ReadAllBytesAsync(Path.Combine(releaseDirectory, "stable", "channel.json")));
+            var compat = trust.Verify<PackRelease>(await File.ReadAllBytesAsync(Path.Combine(releaseDirectory, "compatibility-pack.json")));
+            new ReleaseClient(http, trust).Validate(compat);
+            if (legacy.Repository != repository || legacy.PackVersion != compat.Version || legacy.AppUrl != channel.AppUrl || legacy.AppVersion != app.Version
+                || legacy.PackUrl != $"https://github.com/{repository}/releases/download/pack-v{compat.Version}/pack.json") throw new IOException("Неверный канал совместимости.");
+        }
         foreach (var (tag, names) in expectedAssets)
         {
             var actual = Directory.GetFiles(Path.Combine(releaseDirectory, tag)).Select(Path.GetFileName).OfType<string>().ToHashSet(StringComparer.Ordinal);
@@ -175,4 +202,6 @@ static async Task Run(string[] args)
 }
 
 sealed record BuildConfig(string Repository, string PrivateKey, string Archive, string Executable, string Output,
-    int PackVersion, string AppVersion, string[] Notes, string[] LegacyArchives, string[] ApprovedJarHashes, string? PreviousPack = null);
+    int PackVersion, string AppVersion, string[] Notes, string[] LegacyArchives, string[] ApprovedJarHashes, string? PreviousPack = null,
+    string? Sources = null, string? CompatibilityPack = null, string MinimumUpdater = "1.0.0", bool RequireComplete = false);
+sealed record ExternalSource(string Path, string Sha256, long Size, string Url);

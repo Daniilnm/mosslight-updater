@@ -19,7 +19,7 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
     private UpdateChannel? _channel;
     private AppRelease? _app;
     private bool _busy, _critical, _hasBackup, _closeWhenIdle;
-    private string _path = "", _title = "Выберите папку сборки", _detail = "Укажите папку сборки один раз — дальше достаточно нажать «Обновить».", _notes = "Проверим доступный выпуск после подключения к GitHub.";
+    private string _path = "", _title = "Выберите папку сборки", _detail = "Новый профиль — установим полный комплект. Для готовой сборки скачаем только изменения.", _notes = "Проверяем доступный выпуск.";
     private double _progress;
     public event PropertyChangedEventHandler? PropertyChanged;
     public event Action? CloseRequested;
@@ -36,18 +36,18 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
     public Visibility AppUpdateVisibility => _app is not null && Version.Parse(_app.Version) > App.CurrentVersion ? Visibility.Visible : Visibility.Collapsed;
     public Visibility ConflictVisibility => _plan?.Conflicts.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     public bool QuarantineConflicts { get; set; }
-    public string MainButtonLabel => _busy ? (_critical ? "Устанавливаем…" : "Подготовка…") : string.IsNullOrEmpty(_path) ? "Выбрать папку" : _plan is { Changes.Length: 0, Conflicts.Length: 0 } ? "Всё актуально" : "Обновить";
+    public string MainButtonLabel => _busy ? (_critical ? "Устанавливаем…" : "Подготовка…") : string.IsNullOrEmpty(_path) ? "Выбрать папку" : _plan is { Changes.Length: 0, Conflicts.Length: 0 } ? "Всё актуально" : _plan?.FirstInstall == true ? "Установить сборку" : "Обновить";
     public ICommand ChooseFolderCommand { get; }
     public ICommand CheckCommand { get; }
     public ICommand UpdateCommand { get; }
     public ICommand RollbackCommand { get; }
     public ICommand ImportArchiveCommand { get; }
     public ICommand UpdateAppCommand { get; }
-    public LauncherViewModel(TrustSettings trust, string data, bool preview = false)
+    public LauncherViewModel(TrustSettings trust, string data, bool preview = false, HttpMessageHandler? handler = null, IInstanceGuard? guard = null)
     {
         _trust = trust; _data = data;
-        var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) }; http.DefaultRequestHeaders.UserAgent.ParseAdd("mosslight-updater/1.0.0");
-        _client = new(http, new(trust)); _engine = new(_client, new WindowsInstanceGuard());
+        var http = new HttpClient(handler ?? new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(30) }; http.DefaultRequestHeaders.UserAgent.ParseAdd("mosslight-updater/" + App.CurrentVersion.ToString(3));
+        _client = new(http, new(trust)); _engine = new(_client, guard ?? new WindowsInstanceGuard());
         _engine.BeforeCommit = () => Application.Current.Dispatcher.InvokeAsync(() => { _critical = true; Refresh(); }).Task;
         ChooseFolderCommand = new Command(async () => { if (ChooseFolder()) await CheckAsync(); }, () => !_busy);
         CheckCommand = new Command(CheckAsync, () => !_busy);
@@ -63,13 +63,14 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
         }
         else LoadSettings();
     }
-    public Task InitializeAsync() => !string.IsNullOrEmpty(_path) && !string.IsNullOrEmpty(_trust.Repository) ? CheckAsync() : Task.CompletedTask;
+    public Task InitializeAsync() => !string.IsNullOrEmpty(_trust.Repository) ? CheckAsync() : Task.CompletedTask;
     public void SetPreviewState(string state)
     {
         if (state == "progress") { _busy = true; _progress = 63; _title = "Скачиваем изменённые файлы"; _detail = "Интерфейс рюкзака · 195 из 310 КиБ"; }
         if (state == "error") { _title = "GitHub сейчас недоступен"; _detail = "Проверьте интернет и нажмите «Проверить» ещё раз. Установленные файлы сохранены."; }
         if (state == "app") { _app = new(1, "1.0.1", "", "", 1); _title = "Сборка v21 актуальна"; _detail = "Доступно отдельное обновление самой программы."; }
         if (state == "rollback") { _title = "Предыдущая программа восстановлена"; _detail = "Новая версия не подтвердила запуск. Можно продолжать пользоваться этой версией."; }
+        if (state == "install") { _path = @"C:\Users\Friend\AppData\Roaming\.minecraft\versions\4"; _title = "Готова первая установка сборки v23"; _detail = "Полный комплект · около 1,1 ГБ · Minecraft 1.21.1 / NeoForge 21.1.259 уже выбран в лаунчере."; _plan = new(_path, new(1, "mosslight-friends", 23, "1.21.1", "NeoForge", "1.1.0", [], [], []), [new(null, "preview", null)], [], 0, null, true); }
         Refresh();
     }
     private void Refresh()
@@ -79,7 +80,7 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
     }
     private bool ChooseFolder()
     {
-        var dialog = new OpenFolderDialog { Title = "Выберите папку сборки, в которой находится mods", Multiselect = false };
+        var dialog = new OpenFolderDialog { Title = "Выберите отдельный профиль Minecraft с папкой mods (она может быть пустой)", Multiselect = false };
         if (dialog.ShowDialog() != true) return false;
         try { string root = Paths.Root(dialog.FolderName); UpdateEngine.ValidateInstance(root); _path = root; _plan = null; SaveSettings(); Refresh(); return true; }
         catch (Exception e) { ShowError(e); return false; }
@@ -100,20 +101,26 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
     private async Task LoadPlanAsync(CancellationToken token, IProgress<ProgressInfo> progress)
     {
         RequireSource(); _title = "Проверяем выпуск на GitHub"; _detail = "Сравниваем файлы — повторно скачиваться будет только необходимое."; Refresh();
-        var release = await _client.CheckAsync(token); _channel = release.Channel; _app = release.App;
-        if (Version.Parse(release.Pack.MinimumUpdater) > App.CurrentVersion) { Refresh(); throw new UpdateRejectedException("Сначала обновите саму программу: этот выпуск использует новый формат."); }
-        _notes = string.Join(" ", release.Pack.Notes.Take(3));
-        _plan = await Task.Run(() => _engine.AnalyzeAsync(_path, release.Pack, progress, token), token);
+        var application = await _client.CheckAppAsync(token); _channel = application.Channel; _app = application.App; Refresh();
+        if (string.IsNullOrEmpty(_path))
+        {
+            _title = "Установить или обновить сборку"; _detail = "Выберите папку профиля с mods. Для первой установки подготовьте Minecraft 1.21.1 / NeoForge 21.1.259 в своём лаунчере.";
+            _notes = "Первая установка полного комплекта. Продолжение оборванной загрузки. Проверка всех файлов перед установкой."; Refresh(); return;
+        }
+        _plan = null;
+        var release = await _client.CheckPackAsync(_channel, token);
+        if (Version.Parse(release.MinimumUpdater) > App.CurrentVersion) { Refresh(); throw new UpdateRejectedException("Сначала обновите саму программу: этот выпуск использует новый формат."); }
+        _notes = string.Join(" ", release.Notes.Take(3));
+        _plan = await Task.Run(() => _engine.AnalyzeAsync(_path, release, progress, token), token);
         _hasBackup = UpdateEngine.LatestBackup(_path) is not null;
-        _title = _plan.Changes.Length == 0 ? "Установлена актуальная сборка v" + _plan.Release.Version : "Доступно обновление до v" + _plan.Release.Version;
+        _title = _plan.Changes.Length == 0 ? "Установлена актуальная сборка v" + _plan.Release.Version : _plan.FirstInstall ? "Готова первая установка сборки v" + _plan.Release.Version : "Доступно обновление до v" + _plan.Release.Version;
         _detail = _plan.Changes.Length == 0 ? "Файлы и необходимые настройки проверены. Можно открыть свой лаунчер." :
-            $"Изменений: {_plan.Changes.Length} · загрузка до {Size(_plan.DownloadBytes)} · личные настройки сохранятся.";
+            _plan.FirstInstall ? $"Полный комплект · загрузка до {Size(_plan.DownloadBytes)}. Нужны Minecraft 1.21.1 / NeoForge 21.1.259 в лаунчере." : $"Изменений: {_plan.Changes.Length} · загрузка до {Size(_plan.DownloadBytes)} · личные настройки сохранятся.";
         if (_plan.Conflicts.Length > 0) _detail = "Конфликтующие моды: " + string.Join(", ", _plan.Conflicts.Select(Path.GetFileName)) + ". Их можно перенести в бэкап.";
         _progress = 0; Refresh();
     }
     private async Task CheckAsync()
     {
-        if (string.IsNullOrEmpty(_path) && !ChooseFolder()) return;
         await RunAsync(LoadPlanAsync);
     }
     private async Task UpdateAsync()
@@ -123,8 +130,9 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
         {
             await LoadPlanAsync(token, progress); if (_plan is null) return;
             await Task.Run(() => _engine.ApplyAsync(_plan, QuarantineConflicts, progress, token), token);
-            _critical = false; _plan = _plan with { Changes = [], Conflicts = [] }; _hasBackup = UpdateEngine.LatestBackup(_path) is not null; _progress = 100;
-            _title = "Сборка обновлена до v" + _plan.Release.Version; _detail = "Готово. Теперь можно открыть CurseForge или TLauncher.";
+            bool installed = _plan.FirstInstall;
+            _critical = false; _plan = _plan with { Changes = [], Conflicts = [], FirstInstall = false }; _hasBackup = UpdateEngine.LatestBackup(_path) is not null; _progress = 100;
+            _title = (installed ? "Сборка установлена — v" : "Сборка обновлена до v") + _plan.Release.Version; _detail = "Готово. Теперь можно открыть CurseForge или TLauncher.";
         });
     }
     private async Task RollbackAsync() => await RunAsync(async (token, progress) =>
@@ -150,7 +158,7 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
     private void ShowError(Exception e)
     {
         _title = e is UpdateRejectedException ? "Нужен один шаг" : "Не удалось завершить обновление";
-        _detail = e is HttpRequestException ? "GitHub сейчас недоступен. Проверьте интернет и нажмите «Проверить» ещё раз. Установленные файлы сохранены." : e.Message;
+        _detail = e is HttpRequestException ? "Источник загрузки сейчас недоступен. Проверьте интернет и нажмите «Проверить» ещё раз. Установленные файлы сохранены." : e.Message;
         _progress = 0; Refresh();
     }
     private void LoadSettings()

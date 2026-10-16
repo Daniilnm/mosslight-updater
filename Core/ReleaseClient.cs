@@ -13,7 +13,7 @@ public sealed class ReleaseClient(HttpClient http, SignatureTrust trust)
     public async Task<byte[]> ReadEnvelopeAsync(string url, CancellationToken token)
     {
         trust.ValidateAssetUrl(url);
-        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token);
+        using var response = await SendDownloadAsync(new("manifest", "", 0, FilePolicy.Managed, url), 0, token);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(token);
         using var bytes = new MemoryStream(); byte[] buffer = new byte[65536]; int count;
@@ -23,15 +23,27 @@ public sealed class ReleaseClient(HttpClient http, SignatureTrust trust)
     }
     public async Task<(UpdateChannel Channel, PackRelease Pack, AppRelease App)> CheckAsync(CancellationToken token)
     {
-        var channel = await ReadSignedAsync<UpdateChannel>(trust.Settings.ChannelUrl, token);
+        var (channel, app) = await CheckAppAsync(token);
+        return (channel, await CheckPackAsync(channel, token), app);
+    }
+    public async Task<(UpdateChannel Channel, AppRelease App)> CheckAppAsync(CancellationToken token)
+    {
+        UpdateChannel channel;
+        try { channel = await ReadSignedAsync<UpdateChannel>(trust.Settings.InstallChannelUrl, token); }
+        catch (HttpRequestException e) when (e.StatusCode == HttpStatusCode.NotFound)
+        { channel = await ReadSignedAsync<UpdateChannel>(trust.Settings.ChannelUrl, token); }
         if (channel.Schema != 1 || channel.Repository != trust.Settings.Repository) throw new UpdateRejectedException("Неизвестный канал обновлений.");
-        var pack = await ReadImmutableAsync<PackRelease>(channel.PackUrl, token);
         var app = await ReadImmutableAsync<AppRelease>(channel.AppUrl, token);
-        Validate(pack);
-        if (channel.PackVersion != pack.Version || channel.AppVersion != app.Version || app.Schema != 1
+        if (channel.AppVersion != app.Version || app.Schema != 1
             || !Version.TryParse(app.Version, out _) || !Hashes.IsSha256(app.Sha256) || app.Size is <= 0 or > 2_000_000_000)
             throw new UpdateRejectedException("Несогласованные версии выпуска.");
-        trust.ValidateAssetUrl(app.Url); return (channel, pack, app);
+        trust.ValidateAssetUrl(app.Url); return (channel, app);
+    }
+    public async Task<PackRelease> CheckPackAsync(UpdateChannel channel, CancellationToken token)
+    {
+        var pack = await ReadImmutableAsync<PackRelease>(channel.PackUrl, token); Validate(pack);
+        if (channel.PackVersion != pack.Version) throw new UpdateRejectedException("Несогласованная версия сборки.");
+        return pack;
     }
     private async Task<T> ReadImmutableAsync<T>(string url, CancellationToken token)
     {
@@ -51,7 +63,7 @@ public sealed class ReleaseClient(HttpClient http, SignatureTrust trust)
             if (!names.Add(file.Path) || !Hashes.IsSha256(file.Sha256) || file.Size is < 0 or > 2_000_000_000
                 || file.DownloadSize is < 0 or > 2_000_000_000 || file.Policy != ConfigPatches.PolicyFor(file.Path))
                 throw new UpdateRejectedException("Некорректный список файлов выпуска.");
-            if (file.Url is not null) trust.ValidateAssetUrl(file.Url);
+            if (file.Url is not null) trust.ValidatePackFileUrl(file);
         }
         foreach (string path in pack.LegacyPaths) Paths.RequireManaged(path);
     }
@@ -61,17 +73,14 @@ public sealed class ReleaseClient(HttpClient http, SignatureTrust trust)
         Paths.RejectLinks(cache); Directory.CreateDirectory(cache);
         string complete = Path.Combine(cache, file.Sha256 + ".bin"); Paths.RejectLinks(complete, cache);
         if (File.Exists(complete) && new FileInfo(complete).Length == file.Size && await Hashes.FileAsync(complete, token) == file.Sha256) return complete;
-        if (file.Url is null) throw new UpdateRejectedException("Для восстановления файла «" + file.Path + "» укажите полный архив v" +
-            "20 через настройки. Повторно скачивать его при обычном обновлении не нужно.");
-        trust.ValidateAssetUrl(file.Url);
+        if (file.Url is null) throw new UpdateRejectedException("Для восстановления файла «" + file.Path + "» укажите полный архив сборки через настройки.");
+        trust.ValidatePackFileUrl(file);
         string part = Path.Combine(cache, file.Sha256 + ".part"); Paths.RejectLinks(part, cache);
         long existing = File.Exists(part) ? new FileInfo(part).Length : 0;
         if (file.DownloadSize > 0 && existing > file.DownloadSize) { File.Delete(part); existing = 0; }
         if (file.DownloadSize == 0 || existing != file.DownloadSize)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, file.Url);
-            if (existing > 0) request.Headers.Range = new RangeHeaderValue(existing, null);
-            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+            using var response = await SendDownloadAsync(file, existing, token);
             response.EnsureSuccessStatusCode();
             bool append = response.StatusCode == HttpStatusCode.PartialContent;
             if (append && response.Content.Headers.ContentRange?.From != existing) throw new UpdateRejectedException("Сервер вернул неверный диапазон загрузки.");
@@ -104,5 +113,20 @@ public sealed class ReleaseClient(HttpClient http, SignatureTrust trust)
         { if (File.Exists(temporary)) File.Delete(temporary); File.Delete(part); throw; }
         if (await Hashes.FileAsync(temporary, token) != file.Sha256) { File.Delete(temporary); File.Delete(part); throw new UpdateRejectedException("Не совпала контрольная сумма загрузки. Повторите обновление."); }
         File.Move(temporary, complete, true); File.Delete(part); return complete;
+    }
+    private async Task<HttpResponseMessage> SendDownloadAsync(PackFile file, long offset, CancellationToken token)
+    {
+        string url = file.Url!;
+        for (int redirects = 0; redirects <= 5; redirects++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (offset > 0) request.Headers.Range = new RangeHeaderValue(offset, null);
+            var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+            if (response.StatusCode is not (HttpStatusCode.MovedPermanently or HttpStatusCode.Redirect or HttpStatusCode.RedirectMethod or HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect)) return response;
+            var location = response.Headers.Location; response.Dispose();
+            if (location is null) throw new UpdateRejectedException("Источник не указал адрес перенаправления.");
+            url = new Uri(new Uri(url), location).AbsoluteUri; trust.ValidateDownloadRedirect(file, url);
+        }
+        throw new UpdateRejectedException("Слишком много перенаправлений загрузки.");
     }
 }
