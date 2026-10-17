@@ -27,9 +27,16 @@ public partial class App : Application
         var vm = new LauncherViewModel(trust, data, render); var window = new MainWindow(vm); MainWindow = window;
         if (render) { string state = e.Args.Length == 3 ? e.Args[2] : "home"; vm.SetPreviewState(state); window.SavePreview(e.Args[1], state); Shutdown(); return; }
         if (e.Args is ["--self-update-rolled-back"]) vm.SetPreviewState("rollback");
-        window.ContentRendered += (_, _) =>
+        bool confirmed = false;
+        window.ContentRendered += async (_, _) =>
         {
-            if (e.Args is ["--confirm-self-update", var confirmation]) SelfUpdate.ConfirmHealthy(confirmation, Environment.ProcessPath!, Path.Combine(data, "self-update"));
+            if (!confirmed && e.Args is ["--confirm-self-update", var confirmation])
+            {
+                confirmed = true;
+                SelfUpdate.ConfirmHealthy(confirmation, Environment.ProcessPath!, Path.Combine(data, "self-update"));
+                try { await SelfUpdate.CleanupConfirmedAsync(confirmation, Environment.ProcessPath!, Path.Combine(data, "self-update"), new(trust)); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or UpdateRejectedException or System.Text.Json.JsonException) { }
+            }
         };
         window.Show(); await vm.InitializeAsync();
     }

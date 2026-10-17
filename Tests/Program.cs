@@ -11,7 +11,7 @@ if (args is ["--online", var trustFile, var oldArchive, var testParent])
     var settings = Wire.Decode<TrustSettings>(await System.IO.File.ReadAllBytesAsync(trustFile));
     using var network = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(5) }; network.DefaultRequestHeaders.UserAgent.ParseAdd("Mosslight-Verification/1.0.0");
     var remote = new ReleaseClient(network, new(settings)); var current = await remote.CheckAsync(default);
-    Assert(current.Pack.Version == 23 && current.App.Version == "1.1.0", $"Unexpected live channel: pack={current.Pack.Version}, app={current.App.Version}");
+    Assert(current.Pack.Version == 24 && current.App.Version == "1.1.1", $"Unexpected live channel: pack={current.Pack.Version}, app={current.App.Version}");
     string parent = Paths.Root(testParent); Directory.CreateDirectory(parent); string isolated = Path.Combine(parent, Guid.NewGuid().ToString("N")); Directory.CreateDirectory(isolated);
     string instance = Path.Combine(isolated, "instance"); ZipFile.ExtractToDirectory(oldArchive, instance);
     var updater = new UpdateEngine(remote, new Guard()); var plan = await updater.AnalyzeAsync(instance, current.Pack, null, default);
@@ -20,6 +20,8 @@ if (args is ["--online", var trustFile, var oldArchive, var testParent])
     Assert(await Hashes.FileAsync(Paths.Resolve(instance, "mods/backpack-side-gui-bmc5-2.1.0-bmc5.2.jar")) == "06b5b938e989264b4769a474de64c6b9f3b28e7a258151251c6fceb20993d5c3");
     Assert(!System.IO.File.Exists(Paths.Resolve(instance, "mods/bmc5tweaks-1.0.12.jar")));
     Assert(await Hashes.FileAsync(Paths.Resolve(instance, "mods/bmc5tweaks-1.0.13.jar")) == "5cdcadf1ebfca6a3fe217f2c5f06737f37c47f57df42331069c24838c00f2be6");
+    Assert(await Hashes.FileAsync(Paths.Resolve(instance, "mods/ars_elemental-1.21.1-0.7.10.4.jar")) == "9ba4393c98228bb1647e3786c71c30c7eb97574b9e65baba14f34c92f7b86eb9");
+    Assert(await Hashes.FileAsync(Paths.Resolve(instance, "mods/arsmanahud-1.0.1.jar")) == "958dfca73eee99d8552633e2152ac74718215c59f88c96eee8884ced132825ba");
     await updater.RollbackAsync(instance, null, default);
     using (var zip = ZipFile.OpenRead(oldArchive))
     foreach (var entry in zip.Entries.Where(e => !string.IsNullOrEmpty(e.Name)))
@@ -29,7 +31,7 @@ if (args is ["--online", var trustFile, var oldArchive, var testParent])
     var result = new {passed = true, current.Channel.Repository, packVersion = current.Pack.Version, appVersion = app.Version, appSha256 = app.Sha256, appBytes = app.Size,
         changedFiles = plan.Changes.Length, updateBytes = plan.DownloadBytes, gameLaunch = "NONE", installedGameChanges = "NONE"};
     await System.IO.File.WriteAllBytesAsync(Path.Combine(parent, "online-results.json"), Wire.Encode(result));
-    Console.WriteLine("PASS public GitHub signatures, previous pack → v23 download/apply, complete rollback, and published EXE SHA-256. " + parent); return 0;
+    Console.WriteLine("PASS public GitHub signatures, previous pack → v24 download/apply, complete rollback, and published EXE SHA-256. " + parent); return 0;
 }
 
 string home = Path.Combine(Path.GetFullPath(args.FirstOrDefault() ?? "test-results"), Guid.NewGuid().ToString("N")); Directory.CreateDirectory(home);
@@ -274,6 +276,25 @@ await Test("Self-update rejects corrupted candidate and forged signature before 
     var ticket = new SelfUpdateTicket(current.Id, current.StartTime.ToUniversalTime().Ticks, Path.Combine(session, "Mosslight.Update.exe"), new string('a', 64), Convert.ToBase64String(SignatureTrust.Sign(app, key)), candidate, Path.Combine(session, "healthy")); string path = Path.Combine(session, "ticket.json");
     await System.IO.File.WriteAllBytesAsync(path, Wire.Encode(ticket)); await Reject(() => SelfUpdate.ApplyDetachedAsync(path, trust, new(1,0,0))); Assert(!System.IO.File.Exists(Path.Combine(session, "ready")));
     using var other = RSA.Create(); await System.IO.File.WriteAllBytesAsync(path, Wire.Encode(ticket with {SignedReleaseBase64 = Convert.ToBase64String(SignatureTrust.Sign(app, other))})); await Reject(() => SelfUpdate.ApplyDetachedAsync(path, trust, new(1,0,0)));
+});
+await Test("Self-update cleanup requires signed healthy target and exact previous EXE", async () =>
+{
+    string root = Path.Combine(home, "cleanup"), work = Path.Combine(root, "self"), session = Path.Combine(work, "session"); Directory.CreateDirectory(session);
+    string target = Path.Combine(root, SelfUpdate.ExecutableName), backup = Path.Combine(root, "Mosslight.Update.previous.exe"), ticketPath = Path.Combine(session, "ticket.json");
+    byte[] old = Encoding.UTF8.GetBytes("old executable"), candidate = Encoding.UTF8.GetBytes("new executable");
+    await System.IO.File.WriteAllBytesAsync(target, candidate); await System.IO.File.WriteAllBytesAsync(backup, old);
+    var release = new AppRelease(1, "1.1.1", Asset("app111.exe"), Hashes.Bytes(candidate), candidate.Length);
+    var ticket = new SelfUpdateTicket(0, 0, target, Hashes.Bytes(old), Convert.ToBase64String(SignatureTrust.Sign(release, key)), Path.Combine(session, "candidate.exe"), Path.Combine(session, "healthy"));
+    await System.IO.File.WriteAllBytesAsync(ticketPath, Wire.Encode(ticket)); await System.IO.File.WriteAllBytesAsync(ticket.HealthFile, [1]);
+    string result = Path.Combine(session, "result.json"); await System.IO.File.WriteAllBytesAsync(result, Wire.Encode(new {success=false, version=release.Version}));
+    Assert(!await SelfUpdate.CleanupConfirmedAsync(ticketPath,target,work,trust) && System.IO.File.Exists(backup));
+    await System.IO.File.WriteAllBytesAsync(result, Wire.Encode(new {success=true, version=release.Version}));
+    await System.IO.File.WriteAllTextAsync(backup,"unrelated file");
+    Assert(!await SelfUpdate.CleanupConfirmedAsync(ticketPath,target,work,trust) && System.IO.File.ReadAllText(backup)=="unrelated file");
+    using var other = RSA.Create(); await System.IO.File.WriteAllBytesAsync(ticketPath, Wire.Encode(ticket with {SignedReleaseBase64=Convert.ToBase64String(SignatureTrust.Sign(release,other))}));
+    await Reject(async () => { await SelfUpdate.CleanupConfirmedAsync(ticketPath,target,work,trust); }); Assert(System.IO.File.Exists(backup));
+    await System.IO.File.WriteAllBytesAsync(ticketPath,Wire.Encode(ticket)); await System.IO.File.WriteAllBytesAsync(backup,old);
+    Assert(await SelfUpdate.CleanupConfirmedAsync(ticketPath,target,work,trust) && !System.IO.File.Exists(backup)); Assert(await Hashes.FileAsync(target)==release.Sha256);
 });
 await System.IO.File.WriteAllBytesAsync(Path.Combine(home, "results.json"), Wire.Encode(new {passed, failed, results})); Console.WriteLine($"{passed} passed, {failed} failed. {home}"); return failed == 0 ? 0 : 1;
 

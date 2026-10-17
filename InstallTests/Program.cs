@@ -12,12 +12,12 @@ byte[] expected = await File.ReadAllBytesAsync(args[2]); var pack = trust.Verify
 if (args[0] == "--online")
 {
     var channel = await client.CheckAsync(default);
-    if (channel.Pack.Version != 23 || channel.App.Version != "1.1.0") throw new Exception("Unexpected published versions");
+    if (channel.Pack.Version != 24 || channel.App.Version != "1.1.1") throw new Exception("Unexpected published versions");
     byte[] actual = await client.ReadEnvelopeAsync(channel.Channel.PackUrl, default);
     if (!actual.AsSpan().SequenceEqual(expected)) throw new Exception("Published catalog differs from tested candidate");
     var oldChannel = await client.ReadSignedAsync<UpdateChannel>(trust.Settings.ChannelUrl, default);
     var compatibility = await client.ReadSignedAsync<PackRelease>(oldChannel.PackUrl, default);
-    if (oldChannel.PackVersion != 22 || oldChannel.AppVersion != "1.1.0" || compatibility.Files.Any(f => f.Url is not null && new Uri(f.Url).Host != "github.com"))
+    if (oldChannel.PackVersion != 22 || oldChannel.AppVersion != "1.1.1" || compatibility.Files.Any(f => f.Url is not null && new Uri(f.Url).Host != "github.com"))
         throw new Exception("Legacy app cannot discover new app safely");
     string exe = await client.GetFileAsync(new("application", channel.App.Sha256, channel.App.Size, FilePolicy.Managed, channel.App.Url, channel.App.Size, false), Path.Combine(args[4], "exe-cache"), null, default);
     if (await Hashes.FileAsync(exe) != channel.App.Sha256) throw new Exception("Published EXE mismatch");

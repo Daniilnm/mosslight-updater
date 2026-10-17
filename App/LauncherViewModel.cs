@@ -18,7 +18,7 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
     private UpdatePlan? _plan;
     private UpdateChannel? _channel;
     private AppRelease? _app;
-    private bool _busy, _critical, _hasBackup, _closeWhenIdle;
+    private bool _busy, _critical, _hasBackup, _closeWhenIdle, _appChecked;
     private string _path = "", _title = "Выберите папку сборки", _detail = "Новый профиль — установим полный комплект. Для готовой сборки скачаем только изменения.", _notes = "Проверяем доступный выпуск.";
     private double _progress;
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -34,6 +34,8 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
     public double Progress => _progress;
     public bool IsIndeterminate => _busy && _progress == 0;
     public Visibility AppUpdateVisibility => _app is not null && Version.Parse(_app.Version) > App.CurrentVersion ? Visibility.Visible : Visibility.Collapsed;
+    public string AppVersionLabel => "MOSSLIGHT " + App.CurrentVersion.ToString(3);
+    public string AppStatusDetail => AppUpdateVisibility == Visibility.Visible ? "Доступна версия " + _app!.Version : _appChecked ? "Установлена последняя версия программы" : "Проверить и установить обновление программы";
     public Visibility ConflictVisibility => _plan?.Conflicts.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     public bool QuarantineConflicts { get; set; }
     public string MainButtonLabel => _busy ? (_critical ? "Устанавливаем…" : "Подготовка…") : string.IsNullOrEmpty(_path) ? "Выбрать папку" : _plan is { Changes.Length: 0, Conflicts.Length: 0 } ? "Всё актуально" : _plan?.FirstInstall == true ? "Установить сборку" : "Обновить";
@@ -54,7 +56,7 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
         UpdateCommand = new Command(UpdateAsync, () => !_busy && !(_plan is { Changes.Length: 0, Conflicts.Length: 0 }));
         RollbackCommand = new Command(RollbackAsync, () => !_busy && _hasBackup);
         ImportArchiveCommand = new Command(ImportAsync, () => !_busy && _plan is not null);
-        UpdateAppCommand = new Command(UpdateAppAsync, () => !_busy && AppUpdateVisibility == Visibility.Visible);
+        UpdateAppCommand = new Command(UpdateAppAsync, () => !_busy);
         if (preview)
         {
             _path = @"D:\Minecraft\Mosslight"; _title = "Предпросмотр интерфейса";
@@ -68,14 +70,14 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
     {
         if (state == "progress") { _busy = true; _progress = 63; _title = "Скачиваем изменённые файлы"; _detail = "Интерфейс рюкзака · 195 из 310 КиБ"; }
         if (state == "error") { _title = "GitHub сейчас недоступен"; _detail = "Проверьте интернет и нажмите «Проверить» ещё раз. Установленные файлы сохранены."; }
-        if (state == "app") { _app = new(1, "1.0.1", "", "", 1); _title = "Сборка v21 актуальна"; _detail = "Доступно отдельное обновление самой программы."; }
+        if (state == "app") { _app = new(1, "1.2.0", "", "", 1); _title = "Сборка актуальна"; _detail = "Доступно отдельное обновление самой программы."; }
         if (state == "rollback") { _title = "Предыдущая программа восстановлена"; _detail = "Новая версия не подтвердила запуск. Можно продолжать пользоваться этой версией."; }
         if (state == "install") { _path = @"C:\Users\Friend\AppData\Roaming\.minecraft\versions\4"; _title = "Готова первая установка сборки v23"; _detail = "Полный комплект · около 1,1 ГБ · Minecraft 1.21.1 / NeoForge 21.1.259 уже выбран в лаунчере."; _plan = new(_path, new(1, "mosslight-friends", 23, "1.21.1", "NeoForge", "1.1.0", [], [], []), [new(null, "preview", null)], [], 0, null, true); }
         Refresh();
     }
     private void Refresh()
     {
-        foreach (string property in new[] { nameof(InstancePath), nameof(StatusTitle), nameof(StatusDetail), nameof(ReleaseNotes), nameof(VersionLabel), nameof(SourceLabel), nameof(Progress), nameof(IsIndeterminate), nameof(AppUpdateVisibility), nameof(ConflictVisibility), nameof(MainButtonLabel) }) PropertyChanged?.Invoke(this, new(property));
+        foreach (string property in new[] { nameof(InstancePath), nameof(StatusTitle), nameof(StatusDetail), nameof(ReleaseNotes), nameof(VersionLabel), nameof(SourceLabel), nameof(Progress), nameof(IsIndeterminate), nameof(AppUpdateVisibility), nameof(AppVersionLabel), nameof(AppStatusDetail), nameof(ConflictVisibility), nameof(MainButtonLabel) }) PropertyChanged?.Invoke(this, new(property));
         CommandManager.InvalidateRequerySuggested();
     }
     private bool ChooseFolder()
@@ -101,7 +103,7 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
     private async Task LoadPlanAsync(CancellationToken token, IProgress<ProgressInfo> progress)
     {
         RequireSource(); _title = "Проверяем выпуск на GitHub"; _detail = "Сравниваем файлы — повторно скачиваться будет только необходимое."; Refresh();
-        var application = await _client.CheckAppAsync(token); _channel = application.Channel; _app = application.App; Refresh();
+        var application = await _client.CheckAppAsync(token); _channel = application.Channel; _app = application.App; _appChecked = true; Refresh();
         if (string.IsNullOrEmpty(_path))
         {
             _title = "Установить или обновить сборку"; _detail = "Выберите папку профиля с mods. Для первой установки подготовьте Minecraft 1.21.1 / NeoForge 21.1.259 в своём лаунчере.";
@@ -149,7 +151,14 @@ public sealed class LauncherViewModel : INotifyPropertyChanged
     }
     private async Task UpdateAppAsync() => await RunAsync(async (token, progress) =>
     {
-        if (_channel is null) return; SaveSettings();
+        RequireSource();
+        _title = "Проверяем обновление Mosslight"; Refresh();
+        var application = await _client.CheckAppAsync(token); _channel = application.Channel; _app = application.App; _appChecked = true; Refresh();
+        if (AppUpdateVisibility != Visibility.Visible)
+        {
+            _title = "Mosslight обновлён"; _detail = "Установлена последняя версия программы: " + App.CurrentVersion.ToString(3) + "."; return;
+        }
+        SaveSettings();
         string ticket = await SelfUpdate.PrepareAsync(_client, _channel.AppUrl, Environment.ProcessPath!, Path.Combine(_data, "self-update"), App.CurrentVersion, progress, token);
         _critical = true; _title = "Перезапускаем обновлятор"; _detail = "Выбранная сборка и настройки будут сохранены."; Refresh();
         await SelfUpdate.StartHelperAsync(ticket); Application.Current.Shutdown();

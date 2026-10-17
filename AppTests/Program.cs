@@ -29,6 +29,7 @@ static class Program
         var vm = new LauncherViewModel(trust, Path.Combine(home,"no-folder"), handler: handler, guard: new Closed());
         await vm.InitializeAsync();
         if (vm.AppUpdateVisibility != Visibility.Visible || vm.InstancePath != "Папка ещё не выбрана" || handler.PackRequests != 0) throw new Exception("App update unavailable without selected folder");
+        if (!vm.UpdateAppCommand.CanExecute(null)) throw new Exception("Standalone update command is disabled");
         Console.WriteLine("PASS startup without a folder discovers app update without needing a pack.");
         string root = Path.Combine(home,"versions","4"); Directory.CreateDirectory(Path.Combine(root,"mods"));
         string settings = Path.Combine(home,"empty-profile"); Directory.CreateDirectory(settings);
@@ -42,7 +43,18 @@ static class Program
         vm = new LauncherViewModel(trust,settings,handler:handler,guard:new Closed()); await vm.InitializeAsync();
         if (vm.AppUpdateVisibility != Visibility.Visible || vm.Busy) throw new Exception("Invalid pack hid self-update");
         Console.WriteLine("PASS corrupt pack metadata does not hide app update.");
-        await File.WriteAllBytesAsync(Path.Combine(home,"app-results.json"),Wire.Encode(new {passed=true, scenarios=3, gameProcessActions="NONE"}));
+        channel = channel with { AppVersion = App.CurrentVersion.ToString(3) };
+        handler.Assets[trust.InstallChannelUrl] = SignatureTrust.Sign(channel, key);
+        handler.Assets[channel.AppUrl] = SignatureTrust.Sign(new AppRelease(1, App.CurrentVersion.ToString(3), url + "app.exe", new string('a',64), 100), key);
+        vm = new LauncherViewModel(trust, Path.Combine(home,"current-no-folder"), handler: handler, guard: new Closed());
+        await vm.InitializeAsync();
+        if (!vm.UpdateAppCommand.CanExecute(null)) throw new Exception("Current app cannot check its own updates");
+        int packRequests = handler.PackRequests;
+        vm.UpdateAppCommand.Execute(null);
+        for (int i=0; vm.Busy && i<100; i++) await Task.Delay(20);
+        if (vm.Busy || vm.StatusTitle != "Mosslight обновлён" || handler.PackRequests != packRequests || !vm.AppStatusDetail.Contains("последняя")) throw new Exception("Standalone app check failed or accessed game pack: " + vm.StatusDetail);
+        Console.WriteLine("PASS visible standalone button checks current app without a folder or pack.");
+        await File.WriteAllBytesAsync(Path.Combine(home,"app-results.json"),Wire.Encode(new {passed=true, scenarios=4, gameProcessActions="NONE"}));
     }
     sealed record Settings(string InstancePath);
     sealed class Closed : IInstanceGuard { public Task EnsureClosedAsync(string root,CancellationToken token)=>Task.CompletedTask; }

@@ -91,7 +91,44 @@ public static class SelfUpdate
             Process.Start(new ProcessStartInfo(ticket.Target) { UseShellExecute = false, ArgumentList = { "--self-update-rolled-back" } })?.Dispose();
             throw;
         }
+        // Cleanup is outside the rollback block: a locked backup must never undo a healthy update.
+        await CleanupConfirmedAsync(ticketPath, ticket.Target, Path.GetDirectoryName(session)!, trust);
     }
+    public static async Task<bool> CleanupConfirmedAsync(string ticketPath, string executable, string privateWork, SignatureTrust trust)
+    {
+        if (!Paths.IsBelow(privateWork, ticketPath)) throw new UpdateRejectedException("Неизвестное место запроса самообновления.");
+        Paths.RejectLinks(ticketPath, privateWork);
+        var ticket = Wire.Decode<SelfUpdateTicket>(await File.ReadAllBytesAsync(ticketPath));
+        string session = Path.GetDirectoryName(Path.GetFullPath(ticketPath))!;
+        if (!string.Equals(Path.GetFullPath(ticket.Target), Path.GetFullPath(executable), StringComparison.OrdinalIgnoreCase)
+            || Path.GetFileName(executable) != ExecutableName || ticket.HealthFile != Path.Combine(session, "healthy"))
+            throw new UpdateRejectedException("Не совпало место запуска новой программы.");
+        var release = trust.Verify<AppRelease>(Convert.FromBase64String(ticket.SignedReleaseBase64));
+        string backup = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(executable))!, "Mosslight.Update.previous.exe");
+        string resultPath = Path.Combine(session, "result.json");
+        // Also supports the 1.1.0 helper: it writes success but does not remove the old EXE.
+        for (int i = 0; i < 120; i++)
+        {
+            try
+            {
+                Paths.RejectLinks(resultPath); Paths.RejectLinks(backup); Paths.RejectLinks(executable);
+                if (File.Exists(resultPath))
+                {
+                    var result = Wire.Decode<UpdateResult>(await File.ReadAllBytesAsync(resultPath));
+                    if (!result.Success || result.Version != release.Version || !File.Exists(ticket.HealthFile)
+                        || await Hashes.FileAsync(executable) != release.Sha256) return false;
+                    if (!File.Exists(backup)) return true;
+                    if (await Hashes.FileAsync(backup) != ticket.OriginalSha256) return false;
+                    File.Delete(backup); return true;
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            await Task.Delay(500);
+        }
+        return false;
+    }
+    private sealed record UpdateResult(bool Success, string Version);
     public static void ConfirmHealthy(string ticketPath, string executable, string privateWork)
     {
         if (!Paths.IsBelow(privateWork, ticketPath)) throw new UpdateRejectedException("Неизвестное место запроса самообновления.");
