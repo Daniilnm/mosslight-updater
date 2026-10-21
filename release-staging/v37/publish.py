@@ -155,6 +155,11 @@ def publish():
         release = request(API + '/releases/' + str(release['id']), method='PATCH', auth=True,
                           data={'draft': False, 'make_latest': 'false'})
     assert not release['draft']
+    # Publishing a draft changes its temporary asset download URL to the tag URL.
+    # Always refresh asset metadata before the anonymous download verification.
+    release = request(API + '/releases/' + str(release['id']), auth=True)
+    pack_asset = assets(release)['pack.json']
+    verify_asset(pack_asset, pack_data)
     download_matches(pack_asset, pack_data)
     print('PACK_V37_PUBLISHED_AND_PUBLICLY_VERIFIED', flush=True)
     # Re-read immediately before the channel mutation. Never delete/overwrite an asset.
