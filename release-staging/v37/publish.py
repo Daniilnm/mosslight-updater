@@ -21,6 +21,9 @@ def request(url, *, method='GET', data=None, auth=False, raw=False):
     if auth:
         assert urllib.parse.urlsplit(url).hostname in ('api.github.com', 'uploads.github.com')
     headers = dict(HEADERS)
+    headers['Cache-Control'] = 'no-cache'
+    if method == 'GET' and not raw and urllib.parse.urlsplit(url).hostname == 'api.github.com':
+        url += ('&' if '?' in url else '?') + 'mosslight_verify=' + str(time.time_ns())
     if auth:
         token = os.environ.get('GH_TOKEN')
         if not token: raise RuntimeError('No Actions publication credential')
@@ -182,7 +185,7 @@ def publish():
         download_matches(a[BACKUP], old_data)
     new = upload(stable, 'install-channel.json', channel_data)
     download_matches(new, channel_data)
-    final_stable = request(API + '/releases/tags/stable')
+    final_stable = request(API + '/releases/tags/stable', auth=True)
     final = assets(final_stable)
     download_matches(final['channel.json'], legacy_data)
     download_matches(final[BACKUP], old_data)

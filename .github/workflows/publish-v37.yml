@@ -21,7 +21,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import hashlib, json, os, pathlib, urllib.request
-          expected = {'expected-sha256.json': 'ee7825712bf9d700ed55f52c9114d080557c244a6c0ba3b0bdd50be96307d9bb', 'install-channel.json': '0c1fc8702f2597ad3c2805a66132a12c9b2848651ff04d24fcc47e06b7fb512f', 'legacy-channel.json': '1f3e39a16ca6b9d70e12188a0d44b0016f923669128e481876fbf692510cfc61', 'pack.json': '07a19befe121d1a37473f2ba37063986efc153a1df73964ae2864265ec25e766', 'previous-install-channel.json': 'debe84325018eedb4bb522f52b1bb5c44efee963593885340f8d7a5df6adb89c', 'publish.py': 'a53cd200d6c4d6cad54935aae265338b918cc9b3d3e16c667735b7d75266aff7', 'release-public.pem': '830a40a37590385fbcaa748bc51e21f05e7d8b6c5375fb3d7234aeb389290df8'}
+          expected = {'expected-sha256.json': 'ee7825712bf9d700ed55f52c9114d080557c244a6c0ba3b0bdd50be96307d9bb', 'install-channel.json': '0c1fc8702f2597ad3c2805a66132a12c9b2848651ff04d24fcc47e06b7fb512f', 'legacy-channel.json': '1f3e39a16ca6b9d70e12188a0d44b0016f923669128e481876fbf692510cfc61', 'pack.json': '07a19befe121d1a37473f2ba37063986efc153a1df73964ae2864265ec25e766', 'previous-install-channel.json': 'debe84325018eedb4bb522f52b1bb5c44efee963593885340f8d7a5df6adb89c', 'publish.py': '144a180fa8fd3388050ce7861d9cbb6bc6e26dc931a9b7028a8658e1713b19a2', 'release-public.pem': '830a40a37590385fbcaa748bc51e21f05e7d8b6c5375fb3d7234aeb389290df8'}
           root = pathlib.Path('release-staging/v37'); root.mkdir(parents=True, exist_ok=True)
           commit = os.environ['SOURCE_COMMIT']
           assert len(commit) == 40 and all(c in '0123456789abcdef' for c in commit)
