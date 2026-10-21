@@ -1,0 +1,7 @@
+{
+  "pack.json": "07a19befe121d1a37473f2ba37063986efc153a1df73964ae2864265ec25e766",
+  "install-channel.json": "0c1fc8702f2597ad3c2805a66132a12c9b2848651ff04d24fcc47e06b7fb512f",
+  "previous-install-channel.json": "debe84325018eedb4bb522f52b1bb5c44efee963593885340f8d7a5df6adb89c",
+  "legacy-channel.json": "1f3e39a16ca6b9d70e12188a0d44b0016f923669128e481876fbf692510cfc61",
+  "release-public.pem": "830a40a37590385fbcaa748bc51e21f05e7d8b6c5375fb3d7234aeb389290df8"
+}

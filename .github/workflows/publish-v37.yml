@@ -1,0 +1,38 @@
+name: Publish signed Mosslight v37
+on:
+  push:
+    branches: ['release/publish-v37']
+    paths: ['.github/workflows/publish-v37.yml']
+permissions: {}
+concurrency:
+  group: mosslight-publish-v37
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'Daniilnm/mosslight-updater' && github.ref == 'refs/heads/release/publish-v37'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch exact reviewed artifacts without credentials
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, urllib.request
+          expected = {'expected-sha256.json': 'ee7825712bf9d700ed55f52c9114d080557c244a6c0ba3b0bdd50be96307d9bb', 'install-channel.json': '0c1fc8702f2597ad3c2805a66132a12c9b2848651ff04d24fcc47e06b7fb512f', 'legacy-channel.json': '1f3e39a16ca6b9d70e12188a0d44b0016f923669128e481876fbf692510cfc61', 'pack.json': '07a19befe121d1a37473f2ba37063986efc153a1df73964ae2864265ec25e766', 'previous-install-channel.json': 'debe84325018eedb4bb522f52b1bb5c44efee963593885340f8d7a5df6adb89c', 'publish.py': 'd54e4897cc1d8d472c717fd8253328cfa9b3933b97b290af3406ce55d028387c', 'release-public.pem': '830a40a37590385fbcaa748bc51e21f05e7d8b6c5375fb3d7234aeb389290df8'}
+          root = pathlib.Path('release-staging/v37'); root.mkdir(parents=True, exist_ok=True)
+          commit = os.environ['SOURCE_COMMIT']
+          assert len(commit) == 40 and all(c in '0123456789abcdef' for c in commit)
+          for name, digest in expected.items():
+              url = 'https://raw.githubusercontent.com/Daniilnm/mosslight-updater/' + commit + '/release-staging/v37/' + name
+              with urllib.request.urlopen(url, timeout=45) as response: data = response.read()
+              assert hashlib.sha256(data).hexdigest() == digest, name
+              (root / name).write_bytes(data)
+          print('COMMITTED_ARTIFACT_HASHES_PASS')
+          PY
+      - name: Verify, publish catalog, preserve previous channel, switch channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 release-staging/v37/publish.py --publish
