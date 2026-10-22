@@ -1,0 +1,38 @@
+name: Publish signed Mosslight v38
+on:
+  push:
+    branches: ['release/publish-v38']
+    paths: ['.github/workflows/publish-v38.yml']
+permissions: {}
+concurrency:
+  group: mosslight-publish-v38
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'Daniilnm/mosslight-updater' && github.ref == 'refs/heads/release/publish-v38'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch exact reviewed artifacts without credentials
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, urllib.request
+          expected = {'blob-3a66aded2188ade096de3e4808e99fd6700527d7319f945735a61ff6f33522e8.gz': '674c685d2096bbc4a03142e7adc88afc628e06cae94ec4002d7a748374ee2451', 'install-channel.json': '4b987f807a9da120945b02e672190f2e2cd1802ce3628eb70d2195c8108b4f03', 'legacy-channel.json': '1f3e39a16ca6b9d70e12188a0d44b0016f923669128e481876fbf692510cfc61', 'pack.json': '40bac8ee8ddd524330a1b0f0a0fabf71c430c9e9c02e5b887cc4c4af09c49222', 'previous-install-channel.json': '0c1fc8702f2597ad3c2805a66132a12c9b2848651ff04d24fcc47e06b7fb512f', 'publish.py': '9f8de1b35c1c91ff5b43f94195620b95bccae37a18131dc956c0060ed8841cc1', 'release-public.pem': '830a40a37590385fbcaa748bc51e21f05e7d8b6c5375fb3d7234aeb389290df8', 'expected-sha256.json': '4788d7b297de4f115fbedde8187e54164a342563de4b5c10f955a1a16ab5d0a4'}
+          root = pathlib.Path('release-staging/v38'); root.mkdir(parents=True, exist_ok=True)
+          commit = os.environ['SOURCE_COMMIT']
+          assert len(commit) == 40 and all(c in '0123456789abcdef' for c in commit)
+          for name, digest in expected.items():
+              url = 'https://raw.githubusercontent.com/Daniilnm/mosslight-updater/' + commit + '/release-staging/v38/' + name
+              with urllib.request.urlopen(url, timeout=45) as response: data = response.read()
+              assert hashlib.sha256(data).hexdigest() == digest, name
+              (root / name).write_bytes(data)
+          print('COMMITTED_ARTIFACT_HASHES_PASS')
+          PY
+      - name: Verify, publish catalog, preserve previous channel, switch channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 release-staging/v38/publish.py --publish
