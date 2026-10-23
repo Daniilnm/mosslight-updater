@@ -1,0 +1,47 @@
+name: Publish signed Mosslight v39
+on:
+  push:
+    branches: ['release/publish-v39']
+    paths: ['.github/workflows/publish-v39.yml']
+permissions: {}
+concurrency:
+  group: mosslight-publish-v39
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'Daniilnm/mosslight-updater' && github.ref == 'refs/heads/release/publish-v39'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch and verify exact public artifacts without credentials
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import base64,hashlib,io,os,pathlib,urllib.request,zipfile
+          chunks = {'bundle-00.b64': '41ca7a3188dc56a5cddbfa49268ab727d1bb2843780aef4d2b8342e4c8d62276', 'bundle-01.b64': '282f5c48bcf7415c4305dc5bccea0d8ec751ad7239acb3c0ea0a28877c4ede2f', 'bundle-02.b64': 'e10c4b4bfe04b2513f0a6ae59c02031577783b61dce193baa04229d8a60ec997', 'bundle-03.b64': 'dd5605acf635a139ca2699c9fc21b053c77fcbd19720b62e6dc8c5941a7030c0', 'bundle-04.b64': 'ca95550922e8eed1683a4f024b32470950bf474b2daf5c732a03fd5f927e06e1', 'bundle-05.b64': '4265841f820dc3b234ad7755f2ebedecaccfe560dd721ebe32d35ac04dcf4000', 'bundle-06.b64': '5a6c119f48845923301e89485291722aee1546312a4b0b467600cf8ca330abaf', 'bundle-07.b64': '9cf531719f71e309e56a33056fe5e81d699a9f0ef220fa2a22a1aa28e6b6f7a9', 'bundle-08.b64': 'a621c537a755ddaa5194dc258bb91fbb7c6a98d1cdc4d771560df872064f1d43', 'bundle-09.b64': 'd12773e5b0d8b875a06168ac1cbbba9ee83afdb818a6d810d55b0a81cd16c64c', 'bundle-10.b64': '83c5c8edc957fda13f4cfa80911cc73f223c16081cf240e01ca6e22fd213e2d3'}
+          expected = {'blob-1099e4a5770db98154571702b568e955caa87c50fadf7c22b9636a18b9d95195.gz': '0f5dc05839526d29352a2a2955ba8196680a48587e245c3357d701a31ddb508c', 'blob-18d1d6c2a874670e85621d379f81a9b6da8c040a2ae2e9a25883290f622653d5.gz': '292c206cb57edfbe1ccb515e700db09c5f5d681c5d6cd8ec1076f3902b397701', 'blob-191fe0397af154a8d85da0afd52751bba1381fa1937fbec6ccdbe5da8ab0ba42.gz': '40b52815bd229b346433369a0b2d79e46d230525f512b0c87dde5405de90bd9e', 'blob-399afffc2d9b73f4bd823358e98aa99406d64faad479452711ca4dd18da5caf5.gz': 'd9b16319dc8bfd6fec97f0a6c44c532d8f51af98129870f9a71707bd6597399a', 'blob-46f13dd3fc54069b5cd32737acea65f095d1e331fb9daa988028eca408ff3853.gz': '3e137a7e7204e385da281d161fdc3ad9a5f7da3aba2afeb3ee79b6e29e3ee166', 'blob-480c72c2d01009b88eec663d9d206e43cb1bfa9b5f290efeec302ee67b9984b7.gz': '8759f610ea2abe75d2480a2b4ddf77f00fa214dd4869a29cea79c3bc90dd2060', 'blob-619a218f5454a2c1c9f97acc0a1e29ebf5ab49803f4c403e92aed6d969a70225.gz': '94d137ce680ca1ea7667fd9a1596bda39c915a7af8efe5896da1729c1debf05e', 'blob-68ae9256d9bcc83b4149e0e0c52a3e8649ce8c9b4cd0fdb5cf06299307e91434.gz': '0f1623e955a0fde0d71ad688a933d1130fe79eea9b77de6409279040d46182a2', 'blob-6f02bcd26f8758d4f4e87555721f5e1ec8091a012f4837f308331a78985fe450.gz': '2cf097a40fc19b80ef0ee121709f275b7097ae5abf026a647fbe494f802c2d16', 'blob-7d090ccb469b095eba0f08d37d426ded22aa6ad730001bf19f8c755b1a84f229.gz': '0c637de111a5b4ccd567796004fa212865aa5411ed3d4769423f36f43f44a614', 'blob-8a375b60fa86502ef785b3cba0e559b260b3af617460c111daccaeb528f1da5b.gz': 'e9fcdcc366b1d9540ffab9409ee7859a1c96a66474a3aa9db32368f97fa9dea5', 'blob-8dfdc778e639020cf3f801b0a05c10ba8269055162847f207a5740e9b4aeb120.gz': 'e06b292ca76378ac58b709febc3eb2e8d58264e0580c4348e797709d8e59b640', 'blob-969d163d486168ef181a95146e3fbfef6a42128f05b5cd2f953ac4b03226c022.gz': '9fa8d32e64a6d9af78f8e1d071ec2f280b020b186bfbd95538f2159090309e9c', 'blob-a0d9a9bff64819c2f04c1caf59f29d930f90f80f7e60490f3c0397e1d4eb50a8.gz': '8061f83c8b063bf4f572193c2e7c8b030748a32c0743a39d6b70ae882c4883a6', 'blob-a402ab084245bf3eb184bdd5b37b530c7a0a8bb0d0fb29f888eae072c0307f64.gz': '81b7b4d30d74e662b0e8a9df4ed8ac2ae261dcb6a9bd4adbb4f292323ea41cc7', 'blob-bb384c3083efa3feedaed8925e697ee7c6e3dac1febbdc227c5d162f696ee442.gz': 'b57f624edf157b84d299ec9044b071d5834a879f932dd37f33e7792adaf56b26', 'blob-c656266112ad8f80df18b2f48944c6c39499223146d1143035c884d15616af8b.gz': 'ba555779e321178ac32a44f7f6accabc063bae27d1cc0a5bb037ab417f954411', 'blob-d7c228a1b16ac80f60b51f1ebb888c981ac747d323d4527d741aa085a90bb632.gz': '898a0d2c6237729536cdd1549b8d6a0e3a998f92190c3af51ecad0e6202b7c73', 'blob-dcf903a9d0f55769084883346050bab828b637d368f67c0a775b05735bd331ba.gz': 'ab4674bfe960e2f9c20196c6b6806474ff9b6c326ffe5516796238f6608e734e', 'blob-e33a0cd83e84cb7cdb21b304266c8cf636203f557ad64ca11ce1acedd08ff2f1.gz': 'c38d790000ba3767aa5468ac0c00e610daac62c98346bd5abd89c91bce7fec4a', 'blob-ecc66966bb70a918e0adc3de8266ddcd6abd17f4544276bea82610f738e13fb3.gz': 'e779ce8f41558f109738146659d027905eb379af1eecb56668ef0da5af34c3fd', 'blob-f5a63080063ce23af1a61243f49e691635f4bfad1b9b4964f38edfd61cfd6bd9.gz': 'e3ce8268a56e0509a443b6acedb1f9334cd3397350eefe3e374dccd16acbb247', 'blob-fdb174a152e9d8bbe9daed6fdce521571e07d344d59c63d4fbc64b6908e9388a.gz': 'f6bac5204447d0c91c5e9421ea2f6b3d0addacda3959eae1e6a02306416e35c8', 'expected-changes.json': '5dfcc0fdbd78e9ff432de5dfa504a8bcf550d63d3556be55b4ed05c95eb2a522', 'install-channel.json': '469a2098473db674c0c5bbc4a9967a3124a87f9ed0968540ca36769578c4045e', 'legacy-channel.json': '1f3e39a16ca6b9d70e12188a0d44b0016f923669128e481876fbf692510cfc61', 'pack.json': 'e75ad88da7e473f58f98b01ab4466411819632d5f76d2ac65e7ab8d14ef4b649', 'previous-install-channel.json': '4b987f807a9da120945b02e672190f2e2cd1802ce3628eb70d2195c8108b4f03', 'previous-pack.json': '40bac8ee8ddd524330a1b0f0a0fabf71c430c9e9c02e5b887cc4c4af09c49222', 'publish.py': 'dc9e3da1a37216cd5b72ef86cc4f8c6bd981107675dfe943f9b72b70677d0eba', 'release-public.pem': '830a40a37590385fbcaa748bc51e21f05e7d8b6c5375fb3d7234aeb389290df8', 'expected-sha256.json': '343999084e5d7044db67eee912306cf7e69f8cff727c7aeb23308cb36e08441a'}
+          root=pathlib.Path('release-staging/v39');root.mkdir(parents=True)
+          commit=os.environ['SOURCE_COMMIT'];assert len(commit)==40 and all(c in '0123456789abcdef' for c in commit)
+          encoded=b''
+          for name,digest in chunks.items():
+              url='https://raw.githubusercontent.com/Daniilnm/mosslight-updater/'+commit+'/release-staging/v39/'+name
+              with urllib.request.urlopen(url,timeout=45) as response:data=response.read()
+              assert hashlib.sha256(data).hexdigest()==digest,name
+              encoded+=data
+          raw=base64.b64decode(encoded,validate=True)
+          assert hashlib.sha256(raw).hexdigest()=='2816d1a15ab3e50b8c505bef776b6a28adc44452083b67334389e053ea90a707'
+          with zipfile.ZipFile(io.BytesIO(raw)) as z:
+              assert set(z.namelist())==set(expected)
+              for name,digest in expected.items():
+                  assert pathlib.PurePosixPath(name).name==name
+                  data=z.read(name);assert hashlib.sha256(data).hexdigest()==digest,name
+                  (root/name).write_bytes(data)
+          print('COMMITTED_ARTIFACT_HASHES_PASS')
+          PY
+      - name: Verify signatures, publish pack, preserve v38, switch channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 release-staging/v39/publish.py --publish
