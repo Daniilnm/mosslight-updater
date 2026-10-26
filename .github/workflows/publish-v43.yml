@@ -1,0 +1,47 @@
+name: Publish signed Mosslight v43
+on:
+  push:
+    branches: ['release/publish-v43']
+    paths: ['.github/workflows/publish-v43.yml']
+permissions: {}
+concurrency:
+  group: mosslight-publish-v43
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'Daniilnm/mosslight-updater' && github.ref == 'refs/heads/release/publish-v43'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch and verify exact public artifacts without credentials
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import base64,hashlib,io,os,pathlib,urllib.request,zipfile
+          chunks = {'bundle-00.b64': 'c04bafbae3d662151c74e29321bfca9769c04c1fa62e04d3e7146a16ca5b9a7e', 'bundle-01.b64': '82ee7d2cbe18a8b5228a572dca5e2d228ae797bb8059e0181a672adbbbfcd7ba', 'bundle-02.b64': 'e6d97c8d1b107fe6c98e6039d296623c33ea65ee9eeff5b0ed9831ded2cc3e6c', 'bundle-03.b64': 'b6be8525e13bef295f02d37dcfc2b03984c14a7352dfbd492d4507015eb827d2', 'bundle-04.b64': 'c51cb22652d4001e7b09db6a79d65acf8b2843f37f05ece2866e2429319c77be', 'bundle-05.b64': 'a357c8059448506b85b5a8e4b9baff62231a7b110a3db13f6147e8cc71e713fe', 'bundle-06.b64': '331de68c93e7a27567c1ec24e2acd2515ef5756878999a561ef300821fb8eada'}
+          expected = {'blob-045046d2b6a78861b598f0b7a360288f949f3c38d5f81c9f65651dfdd6bf2903.gz': '414c0245557dbae3a8a817afad12ca992faf03d5e3f751c3f1ea69a47546d78d', 'blob-28e3e3b4d21bbdd0172648c7771a5b766af488478f145c8838829c34b6ab3061.gz': 'a7bc295f82dd9e63c8ced998d0817027745e78217f1535dc69063237cd488c55', 'blob-4f28c85720992ac087408720d1c90d43c44701df5f65faccd884956fdca6ad84.gz': 'bc8a07f9312d3792eab793d5e6885bdc81113e4fbcd1a07580c168359168580f', 'blob-e20f9c09ca0c5945470d96d934824db7c30f02c79353a70864be2fd0e382e7d3.gz': 'c8f056135057c6816c3d4ba1aa1304df38e9545835c601a1d81a03b14568096a', 'expected-changes.json': 'cd26f109722f45da1b6d12400fe6fec7121de615f7348de831cc13ab4e3c1899', 'install-channel.json': '706e20f0299922f86e37c0fd483ffebc41fcb5afd686002fd3b42487d2135ff7', 'legacy-channel.json': '1f3e39a16ca6b9d70e12188a0d44b0016f923669128e481876fbf692510cfc61', 'pack.json': '61f6e15b088be9c2b97db43a6a94665fbe26c0976c0fd6ef99e13f65f07d3d04', 'previous-install-channel.json': 'ed0183f48ae83670eb732130a3324a01a64b8ef7b7f8621106b7d1e34c77ba38', 'previous-pack.json': '5218e8a8fc7ab62d069229071b36353b4b4ced8af3bab65a1a67ca9049d0480b', 'publish.py': 'dcbdd66649d892e3f09db80497d34fde937af30abff3d6c82b079a8830cfee31', 'release-public.pem': '830a40a37590385fbcaa748bc51e21f05e7d8b6c5375fb3d7234aeb389290df8', 'expected-sha256.json': '46b173220405bba6f3f6c1339fae550f90cb2333af206da1ace82281e47f6610'}
+          root=pathlib.Path('release-staging/v43');root.mkdir(parents=True)
+          commit=os.environ['SOURCE_COMMIT'];assert len(commit)==40 and all(c in '0123456789abcdef' for c in commit)
+          encoded=b''
+          for name,digest in chunks.items():
+              url='https://raw.githubusercontent.com/Daniilnm/mosslight-updater/'+commit+'/release-staging/v43/'+name
+              with urllib.request.urlopen(url,timeout=45) as response:data=response.read()
+              assert hashlib.sha256(data).hexdigest()==digest,name
+              encoded+=data
+          raw=base64.b64decode(encoded,validate=True)
+          assert hashlib.sha256(raw).hexdigest()=='72ff713c0b7478209cc9c6004832851cf649c852bd26f9a686d5384ca3a2469d'
+          with zipfile.ZipFile(io.BytesIO(raw)) as z:
+              assert set(z.namelist())==set(expected)
+              for name,digest in expected.items():
+                  assert pathlib.PurePosixPath(name).name==name
+                  data=z.read(name);assert hashlib.sha256(data).hexdigest()==digest,name
+                  (root/name).write_bytes(data)
+          print('COMMITTED_ARTIFACT_HASHES_PASS')
+          PY
+      - name: Verify signatures, publish pack, preserve v42, switch channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 release-staging/v43/publish.py --publish
