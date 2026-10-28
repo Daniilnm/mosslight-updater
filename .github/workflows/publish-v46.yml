@@ -1,0 +1,48 @@
+name: Publish signed Mosslight v46
+on:
+  push:
+    branches: ['release/publish-v46']
+    paths: ['.github/workflows/publish-v46.yml']
+permissions: {}
+concurrency:
+  group: mosslight-publish-v46
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'Daniilnm/mosslight-updater' && github.ref == 'refs/heads/release/publish-v46'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch and verify exact public artifacts without credentials
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import base64,hashlib,io,os,pathlib,urllib.request,zipfile
+          chunks = {'bundle-00.b64': '6424014aed2da9e5fd163a63d8fff4a54538b28a48e6615169067668de3cac1a', 'bundle-01.b64': 'd3e0fbbb85ec8e4b4cd9270f3337a9d9e709a9c51a2e3ebcf83f88243654bbce', 'bundle-02.b64': '7e5480cf7d060fbda54ad09db8b9ad1ffb453ba6558402e2d6caae779b98c446', 'bundle-03.b64': '3e552eaf5e7b34418d3e867c863b91f77d31b9da7522d78703329c49e3d487a2', 'bundle-04.b64': '9e66a8d27c8cd7d66e34ed9ac3312d1d2f13f30fad98ed48c8356f1f960d1463', 'bundle-05.b64': '4527f8e3a721f967e0940f8b7bc9c208b9331fe64c318b468aa82f5d458a0ccc', 'bundle-06.b64': 'cf73181ee042f4e104d17ec687f74a35eb0fb77efd73441639aba308b62fc686', 'bundle-07.b64': '7bf3d5fea128ec9f202bb21af96c7d3293e53fbf51d1c8dc00b201f110801c9b', 'bundle-08.b64': '66b081e74803d3a2129decd6d9edad34949d21ee81aaee1464c3f20d215fa3ae', 'bundle-09.b64': '2b8c7e8b5c11a03e095a7edaa88df5e082071858fba6f666eee3f6443790942b', 'bundle-10.b64': '1ac8a7b8b903e52c44757167f935305143b8e327ab77c3177c3bbac6c1fadb8d', 'bundle-11.b64': '4f511c7ea28f37288ac72a7dd0744b8770789c15b8072dc6b51a1e52669e43f4', 'bundle-12.b64': '6e593dcde5913bc25f9dd810afb62fbc69a6cbee04f5693673325dd3e60f4e80', 'bundle-13.b64': 'ba757c7fe0f4e4b3f8393251c37fd4bf643588b7c947abe7a661931ac809bef3', 'bundle-14.b64': '5170524d707847b6df96c4865c53579546ba770254e17f69c72aefc82011fb8c', 'bundle-15.b64': 'f1462cd6006d2b4ab0e45c07429bb511d19cad369d3822b7dd503dbc587527af', 'bundle-16.b64': 'd2fa0c1042ba33491bd83d311fc91cf7d4a8c2afe34c84df0829069bbca4d731', 'bundle-17.b64': 'c4db8846c0ad719196997c2df70d1c8f1eaeb9eaed45bdf3750a67e38f8fb449', 'bundle-18.b64': '3e29c9330e500d8be49f3c4c799efc8ff703e3730cc59eafb0b3d665df4c7dd2', 'bundle-19.b64': '7458ea199b1ec4d573d9f691a2d2581334cca07a15b90e3ea8878e6f2885d852', 'bundle-20.b64': 'ac6bb4fd383c23eb30f4887e139019839bb92838270a2d7913db436c09e38192', 'bundle-21.b64': '01337c46a977d511258ac7fd6549ed1ce2b945179b8d95924ad593927b8c9c71', 'bundle-22.b64': 'f2b0ade76e475dd68433db0cae352448e307d4e3c8b4461df0fd6f0dc97ca561', 'bundle-23.b64': 'd61725b31d67dc9a3064853cca60ca6d5c0fcc1d41d4c0514c85c9024a96b843', 'bundle-24.b64': 'a0140dd907f62dbff2d51e5fa63f5c89709940742b9177567133fdc6c2d18656', 'bundle-25.b64': '147cae4af1066604448c53f102464b817cb06438d0836ec3c4973e0262613e39', 'bundle-26.b64': '3ce1c27a3a985f57abfc7022d759b2623d505ed3912b3b1712281e7902cd1d0c', 'bundle-27.b64': 'bc888fb35c5194c4f84b6398120d82313507e55e4232c10a434998bbc7a04329', 'bundle-28.b64': 'b430240646772b6317c9aa0e1f74371321432bb6cd70b7cd1436ccce233a63ea', 'bundle-29.b64': '5ae73c0031a40e337751bbdb3b9419f34703640e55e0bc05b8afc8e61497e81b', 'bundle-30.b64': '552d056866f7b89f13fa2289cfe011c1c10965eae03935f2a433a343ad425aef', 'bundle-31.b64': '48ee0c3bbab4350996adbd8227639fe56994e199693a7d437d295319c6c21430'}
+          expected = {'blob-7f1a12dc2e292b7e495c22587937a85efbe4e2624ae51b5e205d94507fdf777e.gz': '51136e225447448c2c5fbbd342cd4ea242bd35e8562588de753208061e764e57', 'expected-changes.json': 'a780e7b040a8a0d7f3802b561b19bbfbe7d4b4186316626c27fa8c2456660ded', 'install-channel.json': 'ebb7a45089b30efeda26c61e477e852778620ce759e59d4f9077626811594d37', 'legacy-channel.json': '1f3e39a16ca6b9d70e12188a0d44b0016f923669128e481876fbf692510cfc61', 'pack.json': '6c5fabf7834c6dd7f28cb191215f04c593ac11b3a26030c5ab29eb1ccf018c92', 'previous-install-channel.json': '7df0c56fb5200f8890dff21021f9f0ad214cbb556e86c3ca6fb97738d885c0d4', 'previous-pack.json': '327662090e6ee2d24e55fe70bbfe441da47ecbc9f5588301cb1d59f4d66cf9aa', 'publish.py': '0ce9fdc73f95a27a4097dead0ca08f5609c86fac85a7743ca6c7ca59af1a2c7b', 'release-public.pem': '830a40a37590385fbcaa748bc51e21f05e7d8b6c5375fb3d7234aeb389290df8', 'expected-sha256.json': 'eb3ce533fc1dd911fa90e671dbac0de9e66428bdd63f20b583fcbb94da039a41'}
+          root=pathlib.Path('release-staging/v46');root.mkdir(parents=True)
+          commit=os.environ['SOURCE_COMMIT'];assert len(commit)==40 and all(c in '0123456789abcdef' for c in commit)
+          encoded=b''
+          for name,digest in chunks.items():
+              url='https://raw.githubusercontent.com/Daniilnm/mosslight-updater/'+commit+'/release-staging/v46/'+name
+              with urllib.request.urlopen(url,timeout=45) as response:data=response.read()
+              assert hashlib.sha256(data).hexdigest()==digest,name
+              encoded+=data
+          raw=base64.b64decode(encoded,validate=True)
+          assert hashlib.sha256(raw).hexdigest()=='d64b8be3225f8b18cb1d1680d6c84d067212801c5a1e50cdf16626416987ae1c'
+          with zipfile.ZipFile(io.BytesIO(raw)) as z:
+              assert set(z.namelist())==set(expected)
+              for name,digest in expected.items():
+                  assert pathlib.PurePosixPath(name).name==name
+                  data=z.read(name);assert hashlib.sha256(data).hexdigest()==digest,name
+                  (root/name).write_bytes(data)
+          print('COMMITTED_ARTIFACT_HASHES_PASS')
+          PY
+      - name: Verify signatures, publish pack, preserve v45, switch channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 release-staging/v46/publish.py --publish
+
