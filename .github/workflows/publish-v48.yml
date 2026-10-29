@@ -1,0 +1,48 @@
+name: Publish signed Mosslight v48
+on:
+  push:
+    branches: ['release/publish-v48']
+    paths: ['.github/workflows/publish-v48.yml']
+permissions: {}
+concurrency:
+  group: mosslight-publish-v48
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'Daniilnm/mosslight-updater' && github.ref == 'refs/heads/release/publish-v48'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch and verify exact public artifacts without credentials
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import base64,hashlib,io,os,pathlib,urllib.request,zipfile
+          chunks = {'bundle-00.b64': 'f04954d04965eda229db9cf7f0fe2323115a18b1c0e58ce01efe9e6805188364', 'bundle-01.b64': '16f0defb1aa6ff02d51f194d96f6de558eb892fd9c90802beab5cbecbb55f37d', 'bundle-02.b64': '805cab47180b6a118d1d18fe77d144eb69883589e86a626ece5b3825ed470c37', 'bundle-03.b64': '9d312363015d8e4d3cf5e8cb899e403c7909a161d961976cc05b35f938c14c8f', 'bundle-04.b64': 'cfc56c38a6cde4ef932eb525a5bfeadc5cf36d71e3709542d05246ef44bc72df', 'bundle-05.b64': '29e38d96523839300eb5385ec96f7fa48c473f605e27226b4c50bbc1d23e4526', 'bundle-06.b64': '0331d1050cc04fb31ddd44d4e08d7a0712bfcfb9838a57dd082b6a9419e393ef', 'bundle-07.b64': '291c501847a8fccee7a69e6f4ef7afa3d4c430a17283faef1896c448a7c35d4d'}
+          expected = {'blob-85e4a6abf4bbedf32272ef38fa9387e458f5dca584c029b9b8ff58526bb8952e.gz': 'd95dc03b95ec16173625433e5acf7da6da66957f489c4369fe66c6a3acb384bb', 'expected-changes.json': 'ef3794e5e328378d9d99b5f0a25a1a80f69a95b95b9e057cad75d73186707391', 'install-channel.json': 'c79e7c4ebf2d50ddeebbf3443ecfd933c545fa6bef079f064896e1dd5125e6a2', 'legacy-channel.json': '1f3e39a16ca6b9d70e12188a0d44b0016f923669128e481876fbf692510cfc61', 'pack.json': '3d7b44571d3f25f8c81783d54d4264f01a9d47b5a5e1ffcfe027f97da1049714', 'previous-install-channel.json': 'ac5efa8a3f0c0f15085e26d59d27d02a419b9532845e826a7201f59c0abc5eda', 'previous-pack.json': '311150e415a17dad3b6ef1904829709f75b962bea95dee3aa0613b97819d4538', 'publish.py': '9f653255ac351d46ff39fd99fe21caa552839fb16dfe8aaf3a7a805e12ea6e54', 'release-public.pem': '830a40a37590385fbcaa748bc51e21f05e7d8b6c5375fb3d7234aeb389290df8', 'expected-sha256.json': 'c1e547f319a65394be4ec999f6823927bfc736f10435a6caeddc2ddb85ab0af5'}
+          root=pathlib.Path('release-staging/v48');root.mkdir(parents=True)
+          commit=os.environ['SOURCE_COMMIT'];assert len(commit)==40 and all(c in '0123456789abcdef' for c in commit)
+          encoded=b''
+          for name,digest in chunks.items():
+              url='https://raw.githubusercontent.com/Daniilnm/mosslight-updater/'+commit+'/release-staging/v48/'+name
+              with urllib.request.urlopen(url,timeout=45) as response:data=response.read()
+              assert hashlib.sha256(data).hexdigest()==digest,name
+              encoded+=data
+          raw=base64.b64decode(encoded,validate=True)
+          assert hashlib.sha256(raw).hexdigest()=='3af4b7fbf98e3177370cce52d11c7e9e88e3fd22e5715ba818be2ef2ec213efe'
+          with zipfile.ZipFile(io.BytesIO(raw)) as z:
+              assert set(z.namelist())==set(expected)
+              for name,digest in expected.items():
+                  assert pathlib.PurePosixPath(name).name==name
+                  data=z.read(name);assert hashlib.sha256(data).hexdigest()==digest,name
+                  (root/name).write_bytes(data)
+          print('COMMITTED_ARTIFACT_HASHES_PASS')
+          PY
+      - name: Verify signatures, publish pack, preserve v47, switch channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 release-staging/v48/publish.py --publish
+
